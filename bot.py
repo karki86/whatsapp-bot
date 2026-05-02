@@ -1,13 +1,13 @@
 from flask import Flask, request
 import openai
 import os
-import json
 import requests
 
 app = Flask(__name__)
 
+# ── PASTE YOUR REAL KEYS HERE ──
 openai.api_key = "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"
-ACCESS_TOKEN = "EAAcKMsH2f8kBRTvTZBOMm4U2kSrbtZBZCxkFm4SlXTKNRT6NSADn8aaK9IGTrvxS5TRTjNUgbjDQPxqWA1AG3FTI8g46FNYOFJC9VNUeili36HJVWGsxAfP5GgymQEbnyLFMs3FeU1RIzB2EYKGpykwvBpVUdS9ZB5pDPXvoZB4DH9BZBZANe8vnZAuCruIOiXA6ZCfZBZATfQ0JVsfcR6uvKr34RZBQsPs5ZCBTTB8KYD1SKQ7aLRqBmWouJW4L58GDx2CoIhERPt38c35yaJWFDcIafq3QQ"
+ACCESS_TOKEN = "EAAcKMsH2f8kBRRXEEXCRz5QBKzIbMsj3cgNF7eTL4dOAeIAZA1ZBOsieWLEDXZB1KFelYZCVU24XmGaF9apzwiWdbSJWGoHEHrMDFThxIoIFlZAFZBNISNbbKnKulZAcz9N5zuAE3gtdwj9KfFdZBsZBNOaVw8HxNf76HD4wExj8SEShuusIYQ2CMJthlZAjZCIVr4M7uDZCZC2GUhx97fq3uUu0AyaVgLi9qsxXrV2uKjccEqgvFDCm3cRQOGpK0WvAyXtcZAyAqh6CbI4qfAzNR8HiZCrZBrGc4gZDZD"
 PHONE_NUMBER_ID = "1245362218657445"
 VERIFY_TOKEN = "nexoraai2026"
 
@@ -28,36 +28,38 @@ PHONE: +91 90000 11223
 DELIVERY: Within 5km, 45 minutes
 
 RULES:
-- Always reply in the same language the customer uses
+- Always reply in same language as customer
 - For orders collect: name, items, quantity, delivery address
 - Keep replies short and friendly
-- Add relevant emojis
+- Add emojis
 - For payment say: Pay on delivery or GPay to 90000 11223
-- Never make up prices not in the menu
+- Never make up prices not in menu
 """
 
 conversations = {}
 
-def send_message(to, message):
+def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(url, headers=headers, json=data)
+    r = requests.post(url, headers=headers, json=payload)
+    print(f"Send response: {r.status_code} {r.text}")
+    return r
 
-def get_reply(sender, message):
+def get_ai_reply(sender, user_message):
     if sender not in conversations:
         conversations[sender] = []
     conversations[sender].append({
         "role": "user",
-        "content": message
+        "content": user_message
     })
     if len(conversations[sender]) > 10:
         conversations[sender] = conversations[sender][-10:]
@@ -75,9 +77,10 @@ def get_reply(sender, message):
             "role": "assistant",
             "content": reply
         })
+        print(f"AI Reply: {reply}")
         return reply
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"OpenAI Error: {e}")
         return "Sorry, please call +91 90000 11223"
 
 @app.route("/webhook", methods=["GET"])
@@ -85,13 +88,16 @@ def verify():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+    print(f"Verify: mode={mode} token={token}")
     if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("Webhook verified!")
         return challenge, 200
     return "Forbidden", 403
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
+    print(f"Incoming data: {data}")
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]
@@ -99,12 +105,16 @@ def webhook():
         if "messages" in value:
             msg = value["messages"][0]
             sender = msg["from"]
-            if msg["type"] == "text":
+            msg_type = msg["type"]
+            print(f"Message from {sender}: type={msg_type}")
+            if msg_type == "text":
                 text = msg["text"]["body"]
-                reply = get_reply(sender, text)
-                send_message(sender, reply)
+                print(f"Text: {text}")
+                reply = get_ai_reply(sender, text)
+                result = send_whatsapp(sender, reply)
+                print(f"Sent to {sender}: {reply}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Webhook Error: {e}")
     return "OK", 200
 
 @app.route("/", methods=["GET"])
