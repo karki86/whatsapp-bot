@@ -9,7 +9,7 @@ app = Flask(__name__)
 openai.api_key = "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"
 ACCESS_TOKEN = "EAAcKMsH2f8kBRXSwayam0GwM2r7u5fwkpW8DzM8UBPw7nmMDyX85g8ZCBZAVoN1ZA4rr5efmtRu16DDOUqzWSqZBqmLZACLLcuwI52ircXnBZCX1brzJZCjXmagsfuruHXCcrhVC1dcEg5uZC2pnO0Vd7ZA2hNw0ZCbmw6hkroNDMDI6D7CDLKHrfcDze7PZAMfVWw81JXj8wCfxai1Mmw7rRwwqbsrgncwiJzCwM8ToG4UA7XQ56ntPUUEC4e3ZC2ZBQXRO4tyS8dN8w6knfSn0gEb3JkPe3swZDZD"
 PHONE_NUMBER_ID = "124536221865744 5"
-VERIFY_TOKEN = "2189461031866222"
+VERIFY_TOKEN = "nexoraai2026"
 
 SYSTEM_PROMPT = """
 You are a helpful WhatsApp assistant for Thenmanan Restaurant in Chennai.
