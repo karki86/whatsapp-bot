@@ -125,3 +125,35 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
 
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    print(f"=== INCOMING WEBHOOK ===")
+    print(f"Data: {data}")
+    try:
+        entry = data["entry"][0]
+        changes = entry["changes"][0]
+        value = changes["value"]
+        print(f"Value keys: {value.keys()}")
+        if "messages" in value:
+            msg = value["messages"][0]
+            sender = msg["from"]
+            msg_type = msg["type"]
+            print(f"=== MESSAGE RECEIVED ===")
+            print(f"From: {sender}")
+            print(f"Type: {msg_type}")
+            if msg_type == "text":
+                text = msg["text"]["body"]
+                print(f"Text: {text}")
+                reply = get_ai_reply(sender, text)
+                print(f"Reply: {reply}")
+                result = send_whatsapp(sender, reply)
+                print(f"Send result: {result.status_code}")
+        else:
+            print(f"No messages in value: {value}")
+    except Exception as e:
+        print(f"=== ERROR ===")
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+    return "OK", 200
