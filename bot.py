@@ -6,7 +6,7 @@ app = Flask(__name__)
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "1245362218657445")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "nexoraai2026")
-OPENAI_KEY = os.environ.get("OPENAI_KEY")
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
 
 PROMPT = "You are WhatsApp assistant for Thenmanan Restaurant Chennai. Menu: Chicken Biryani Rs280, Mutton Biryani Rs320, Fish Fry Rs240, Pepper Chicken Rs280, Samosa Rs80, Falooda Rs120. Hours 11AM-11PM T Nagar. Reply short with emojis."
 
