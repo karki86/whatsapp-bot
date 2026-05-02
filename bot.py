@@ -3,10 +3,10 @@ import os, requests
 
 app = Flask(__name__)
 
-ACCESS_TOKEN = "EAAcKMsH2f8kBRaETVGz0VEuQuFLxrqEyuDaoIt6Lcr02uA6ZB2vuPvuI4XYR3mfq8asmKVYmoo5UUhvTawKbF0SKLrAHA6X2rEepca8ZBfZC2Sh1jWegCLmMnWRvCMq8oV89R4cajqeEdO9lx6TrImYTBdhaNeZAKptzZArCKjXQSPjjOZBgjJHDb87YYziH4xQ85VzbbZCTt0DnZCLYpdvP48lRT0EFksCUNvnQgDGxPQJjdtktEN6pqDWSZBqUmo0fOYMPmZBTB48QsFkW6In6jhRec4FAZDZD"
-PHONE_NUMBER_ID = "1245362218657445"
-VERIFY_TOKEN = "nexoraai2026"
-openai.api_key = "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"
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "1245362218657445")
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "nexoraai2026")
+OPENAI_KEY = os.environ.get("OPENAI_KEY")
 
 PROMPT = "You are WhatsApp assistant for Thenmanan Restaurant Chennai. Menu: Chicken Biryani Rs280, Mutton Biryani Rs320, Fish Fry Rs240, Pepper Chicken Rs280, Samosa Rs80, Falooda Rs120. Hours 11AM-11PM T Nagar. Reply short with emojis."
 
@@ -23,6 +23,7 @@ def ask_gpt(sender, text):
         "max_tokens": 200
     }
     r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body)
+    print(f"OpenAI status: {r.status_code}")
     reply = r.json()["choices"][0]["message"]["content"]
     chats[sender].append({"role":"assistant","content":reply})
     print(f"Reply: {reply}")
