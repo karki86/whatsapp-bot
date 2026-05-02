@@ -1,13 +1,15 @@
 from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
-from openai import OpenAI
+import openai
 import os
+import json
+import requests
 
 app = Flask(__name__)
 
-
-#client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-client = OpenAI(api_key="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")
+openai.api_key = "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"
+ACCESS_TOKEN = "EAAcKMsH2f8kBRXSwayam0GwM2r7u5fwkpW8DzM8UBPw7nmMDyX85g8ZCBZAVoN1ZA4rr5efmtRu16DDOUqzWSqZBqmLZACLLcuwI52ircXnBZCX1brzJZCjXmagsfuruHXCcrhVC1dcEg5uZC2pnO0Vd7ZA2hNw0ZCbmw6hkroNDMDI6D7CDLKHrfcDze7PZAMfVWw81JXj8wCfxai1Mmw7rRwwqbsrgncwiJzCwM8ToG4UA7XQ56ntPUUEC4e3ZC2ZBQXRO4tyS8dN8w6knfSn0gEb3JkPe3swZDZD"
+PHONE_NUMBER_ID = "124536221865744 5"
+VERIFY_TOKEN = "2189461031866222"
 
 SYSTEM_PROMPT = """
 You are a helpful WhatsApp assistant for Thenmanan Restaurant in Chennai.
@@ -36,24 +38,31 @@ RULES:
 
 conversations = {}
 
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp_reply():
-    incoming_msg = request.form.get("Body", "").strip()
-    sender = request.form.get("From", "")
+def send_message(to, message):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": message}
+    }
+    requests.post(url, headers=headers, json=data)
 
+def get_reply(sender, message):
     if sender not in conversations:
         conversations[sender] = []
-
     conversations[sender].append({
         "role": "user",
-        "content": incoming_msg
+        "content": message
     })
-
     if len(conversations[sender]) > 10:
         conversations[sender] = conversations[sender][-10:]
-
     try:
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT}
@@ -61,23 +70,47 @@ def whatsapp_reply():
             max_tokens=300,
             temperature=0.7
         )
-        bot_reply = response.choices[0].message.content
+        reply = response.choices[0].message.content
         conversations[sender].append({
             "role": "assistant",
-            "content": bot_reply
+            "content": reply
         })
-
+        return reply
     except Exception as e:
         print(f"Error: {e}")
-        bot_reply = "Sorry, we are busy right now. Please call +91 90000 11223"
+        return "Sorry, please call +91 90000 11223"
 
-    resp = MessagingResponse()
-    resp.message(bot_reply)
-    return str(resp)
+@app.route("/webhook", methods=["GET"])
+def verify():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "Forbidden", 403
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    try:
+        entry = data["entry"][0]
+        changes = entry["changes"][0]
+        value = changes["value"]
+        if "messages" in value:
+            msg = value["messages"][0]
+            sender = msg["from"]
+            if msg["type"] == "text":
+                text = msg["text"]["body"]
+                reply = get_reply(sender, text)
+                send_message(sender, reply)
+    except Exception as e:
+        print(f"Error: {e}")
+    return "OK", 200
 
 @app.route("/", methods=["GET"])
 def home():
-    return "WhatsApp Bot is running!"
+    return "NexoraAI WhatsApp Bot is Live!", 200
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
