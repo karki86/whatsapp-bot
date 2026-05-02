@@ -51,7 +51,7 @@ def send_whatsapp(to, message):
         "text": {"body": message}
     }
     r = requests.post(url, headers=headers, json=payload)
-    print(f"Send response: {r.status_code} {r.text}")
+    print(f"Send status: {r.status_code} {r.text}")
     return r
 
 def get_ai_reply(sender, user_message):
@@ -83,39 +83,39 @@ def get_ai_reply(sender, user_message):
         print(f"OpenAI Error: {e}")
         return "Sorry, please call +91 90000 11223"
 
-@app.route("/webhook", methods=["GET"])
-def verify():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    print(f"Verify: mode={mode} token={token}")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("Webhook verified!")
-        return challenge, 200
-    return "Forbidden", 403
-
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    data = request.get_json()
-    print(f"Incoming data: {data}")
-    try:
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
-        if "messages" in value:
-            msg = value["messages"][0]
-            sender = msg["from"]
-            msg_type = msg["type"]
-            print(f"Message from {sender}: type={msg_type}")
-            if msg_type == "text":
-                text = msg["text"]["body"]
-                print(f"Text: {text}")
-                reply = get_ai_reply(sender, text)
-                result = send_whatsapp(sender, reply)
-                print(f"Sent to {sender}: {reply}")
-    except Exception as e:
-        print(f"Webhook Error: {e}")
-    return "OK", 200
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        print(f"Verify: mode={mode} token={token}")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("Webhook verified!")
+            return challenge, 200
+        return "Forbidden", 403
+
+    if request.method == "POST":
+        data = request.get_json()
+        print(f"Incoming: {data}")
+        try:
+            entry = data["entry"][0]
+            changes = entry["changes"][0]
+            value = changes["value"]
+            if "messages" in value:
+                msg = value["messages"][0]
+                sender = msg["from"]
+                msg_type = msg["type"]
+                print(f"From: {sender} Type: {msg_type}")
+                if msg_type == "text":
+                    text = msg["text"]["body"]
+                    print(f"Text: {text}")
+                    reply = get_ai_reply(sender, text)
+                    send_whatsapp(sender, reply)
+                    print(f"Replied to {sender}")
+        except Exception as e:
+            print(f"Error: {e}")
+        return "OK", 200
 
 @app.route("/", methods=["GET"])
 def home():
@@ -124,36 +124,3 @@ def home():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    print(f"=== INCOMING WEBHOOK ===")
-    print(f"Data: {data}")
-    try:
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
-        print(f"Value keys: {value.keys()}")
-        if "messages" in value:
-            msg = value["messages"][0]
-            sender = msg["from"]
-            msg_type = msg["type"]
-            print(f"=== MESSAGE RECEIVED ===")
-            print(f"From: {sender}")
-            print(f"Type: {msg_type}")
-            if msg_type == "text":
-                text = msg["text"]["body"]
-                print(f"Text: {text}")
-                reply = get_ai_reply(sender, text)
-                print(f"Reply: {reply}")
-                result = send_whatsapp(sender, reply)
-                print(f"Send result: {result.status_code}")
-        else:
-            print(f"No messages in value: {value}")
-    except Exception as e:
-        print(f"=== ERROR ===")
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    return "OK", 200
