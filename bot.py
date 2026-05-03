@@ -2,6 +2,21 @@ from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 import requests, os, random, json
 from datetime import datetime
+import threading
+import time
+
+def keep_alive():
+    while True:
+        try:
+            requests.get("https://whatsapp-bot-dovr.onrender.com")
+            print("Keep-alive ping sent")
+        except:
+            pass
+        time.sleep(240)  # ping every 4 minutes
+
+# Start keep-alive thread
+thread = threading.Thread(target=keep_alive, daemon=True)
+thread.start()
 
 app = Flask(__name__)
 OPENAI_KEY  = os.environ.get("OPENAI_API_KEY")
