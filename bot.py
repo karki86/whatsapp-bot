@@ -2,25 +2,125 @@ from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 import requests, os, random, json
 from datetime import datetime
-import threading
-import time
-
-def keep_alive():
-    while True:
-        try:
-            requests.get("https://whatsapp-bot-dovr.onrender.com")
-            print("Keep-alive ping sent")
-        except:
-            pass
-        time.sleep(240)  # ping every 4 minutes
-
-# Start keep-alive thread
-thread = threading.Thread(target=keep_alive, daemon=True)
-thread.start()
 
 app = Flask(__name__)
 OPENAI_KEY  = os.environ.get("OPENAI_API_KEY")
 MASTER_KEY  = os.environ.get("MASTER_KEY", "NEXORAAI2026")
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PLATFORM PAYMENT DETAILS (NexoraAI collects — pays restaurant later)
+# ════════════════════════════════════════════════════════════════════════════
+PLATFORM = {
+    "name":       "FoodieBot",
+    "company":    "NexoraAI",
+    "upi":        os.environ.get("PLATFORM_UPI", "nexoraai@upi"),
+    "gpay":       os.environ.get("PLATFORM_GPAY", "nexoraai@okicici"),
+    "phonepe":    os.environ.get("PLATFORM_PHONEPE", "nexoraai@ybl"),
+    "card_link":  os.environ.get("PLATFORM_CARD", "https://rzp.io/l/nexoraai"),
+    "phone":      "+91 7010624989",
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PAYOUT TRACKING SYSTEM
+#  Commission: 10% per order + delivery charge
+#  Restaurants paid daily via UPI/Bank transfer
+# ════════════════════════════════════════════════════════════════════════════
+COMMISSION_RATE = 0.10   # 10% platform commission
+
+# In-memory payout ledger (use database in production)
+payout_ledger = {}
+order_history = []
+
+def calculate_split(order_total, delivery_charge, commission_rate=COMMISSION_RATE):
+    """Calculate how much restaurant gets vs platform keeps"""
+    platform_commission = int(order_total * commission_rate)
+    platform_total      = platform_commission + delivery_charge
+    restaurant_amount   = order_total - platform_commission
+    return {
+        "order_total":          order_total,
+        "delivery_charge":      delivery_charge,
+        "platform_commission":  platform_commission,
+        "platform_total":       platform_total,
+        "restaurant_amount":    restaurant_amount,
+    }
+
+def record_order_payout(restaurant_id, order_id, order_total, delivery_charge):
+    """Record every order in ledger"""
+    split = calculate_split(order_total, delivery_charge)
+    
+    # Add to ledger
+    if restaurant_id not in payout_ledger:
+        payout_ledger[restaurant_id] = {
+            "pending":     0,
+            "paid":        0,
+            "total_orders": 0,
+        }
+    
+    payout_ledger[restaurant_id]["pending"]      += split["restaurant_amount"]
+    payout_ledger[restaurant_id]["total_orders"] += 1
+    
+    # Record in history
+    order_history.append({
+        "order_id":           order_id,
+        "restaurant_id":      restaurant_id,
+        "order_total":        order_total,
+        "platform_commission": split["platform_commission"],
+        "restaurant_amount":  split["restaurant_amount"],
+        "delivery_charge":    delivery_charge,
+        "timestamp":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "payout_status":      "pending",
+    })
+    
+    print(f"Order {order_id}: Total ₹{order_total} | Restaurant gets ₹{split['restaurant_amount']} | Platform keeps ₹{split['platform_total']}")
+    return split
+
+def get_payout_summary():
+    """Get summary of all pending payouts"""
+    summary = []
+    total_pending = 0
+    total_platform = 0
+    
+    for rid, data in payout_ledger.items():
+        r = RESTAURANTS.get(rid, {})
+        summary.append({
+            "restaurant_id":   rid,
+            "restaurant_name": r.get("name", rid),
+            "phone":           r.get("phone", ""),
+            "upi":             r.get("upi", ""),
+            "pending_payout":  data["pending"],
+            "total_orders":    data["total_orders"],
+            "paid_so_far":     data["paid"],
+        })
+        total_pending += data["pending"]
+    
+    platform_earnings = sum(
+        o["platform_commission"] + o["delivery_charge"]
+        for o in order_history
+    )
+    
+    return {
+        "summary":          summary,
+        "total_pending":    total_pending,
+        "platform_earnings": platform_earnings,
+        "total_orders":     len(order_history),
+    }
+
+def mark_restaurant_paid(restaurant_id, amount=None):
+    """Mark restaurant as paid after manual transfer"""
+    if restaurant_id in payout_ledger:
+        pay_amount = amount or payout_ledger[restaurant_id]["pending"]
+        payout_ledger[restaurant_id]["paid"]    += pay_amount
+        payout_ledger[restaurant_id]["pending"] -= pay_amount
+        
+        # Update history
+        for order in order_history:
+            if order["restaurant_id"] == restaurant_id and order["payout_status"] == "pending":
+                order["payout_status"] = "paid"
+        
+        return True
+    return False
+
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  PLATFORM — RESTAURANT DATABASE
@@ -471,16 +571,33 @@ def build_order_summary(r, items_dict, discount=0, coupon_type=None, name="Custo
     t += f"🛵 Delivery:   ₹{delivery}\n"
     t += f"💰 *Total:     ₹{total}*\n"
     t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    t += "*Choose Payment:*\n\n"
-    t += f"1️⃣ *Google Pay* → `{r['gpay']}` — ₹{total}\n\n"
-    t += f"2️⃣ *PhonePe* → `{r['phonepe']}` — ₹{total}\n\n"
-    t += f"3️⃣ *Any UPI* → `{r['upi']}` — ₹{total}\n\n"
-    t += f"4️⃣ *Card* → {r['card_link']}\n\n"
-    t += f"5️⃣ *Cash on Delivery* — ₹{total}\n\n"
+    # Platform UPI deep links (NexoraAI collects payment)
+    gpay_link    = f"gpay://upi/pay?pa={PLATFORM['upi']}&am={total}&tn=FoodOrder-{order_id}&cu=INR"
+    phonepe_link = f"phonepe://pay?pa={PLATFORM['upi']}&am={total}&tn=FoodOrder-{order_id}&cu=INR"
+    paytm_link   = f"paytmmp://pay?pa={PLATFORM['upi']}&am={total}&tn=FoodOrder-{order_id}&cu=INR"
+
+    t += "*Choose Payment Method:*\n\n"
+    t += f"1️⃣ *Google Pay* 📱\n"
+    t += f"   Amount: *₹{total}*\n"
+    t += f"   👉 {gpay_link}\n\n"
+    t += f"2️⃣ *PhonePe* 📱\n"
+    t += f"   Amount: *₹{total}*\n"
+    t += f"   👉 {phonepe_link}\n\n"
+    t += f"3️⃣ *Paytm / Any UPI* 📱\n"
+    t += f"   Amount: *₹{total}*\n"
+    t += f"   👉 {paytm_link}\n\n"
+    t += f"4️⃣ *Credit / Debit Card* 💳\n"
+    t += f"   Amount: *₹{total}*\n"
+    t += f"   👉 {PLATFORM['card_link']}?amount={total}\n\n"
+    t += f"5️⃣ *Cash on Delivery* 💵\n"
+    t += f"   Pay *₹{total}* at your door\n"
+    t += f"   Type *cod* to confirm instantly\n\n"
     t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    t += "📸 After UPI: share screenshot here\n"
-    t += "💵 COD: type *cod* to confirm\n"
-    t += f"⏱️ Delivery: {r['delivery_time']}"
+    t += "📸 *After online payment:*\n"
+    t += "Share payment screenshot here ✅\n\n"
+    t += f"Order ID: *{order_id}*\n"
+    t += f"⏱️ Delivery: {r['delivery_time']}\n"
+    t += f"📞 Help: {PLATFORM['phone']}"
     return t, order_id, total
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -580,6 +697,7 @@ def handle_message(sender, text):
 
         if any(x in t for x in ["cod","cash","cash on delivery","5"]):
             del active_orders[sender]
+            record_order_payout(r["id"], oid, order.get("subtotal",0), r["delivery_charge"])
             return f"""✅ *Order Confirmed — COD!*
 Order ID: *{oid}*
 Restaurant: {r['name']}
@@ -592,6 +710,7 @@ Customer: {name}
 
         if any(x in t for x in ["paid","done","sent","payment","screenshot"]):
             del active_orders[sender]
+            record_order_payout(r["id"], oid, order.get("subtotal",0), r["delivery_charge"])
             return f"""✅ *Payment Confirmed — Order Placed!*
 Order ID: *{oid}*
 Restaurant: {r['name']}
@@ -851,18 +970,53 @@ def whatsapp():
     resp.message(reply)
     return str(resp)
 
+@app.route("/admin/payouts", methods=["GET"])
+def admin_payouts():
+    """View all pending restaurant payouts"""
+    if request.args.get("key") != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
+    data = get_payout_summary()
+    return jsonify(data)
+
+@app.route("/admin/payout/mark-paid", methods=["POST"])
+def mark_paid():
+    """Mark a restaurant as paid after manual UPI transfer"""
+    if request.json.get("key") != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
+    rid    = request.json.get("restaurant_id")
+    amount = request.json.get("amount")
+    if mark_restaurant_paid(rid, amount):
+        return jsonify({"success": True, "message": f"Marked {rid} as paid ₹{amount}"})
+    return jsonify({"success": False, "message": "Restaurant not found"}), 404
+
+@app.route("/admin/orders", methods=["GET"])
+def admin_orders():
+    """View all order history"""
+    if request.args.get("key") != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
+    return jsonify({
+        "orders": order_history[-50:],
+        "total":  len(order_history)
+    })
+
 @app.route("/admin/stats", methods=["GET"])
 def admin_stats():
     if request.args.get("key") != MASTER_KEY:
         return jsonify({"error":"Unauthorized"}), 401
+    if request.args.get("key") != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
     active = [r for r in RESTAURANTS.values() if r.get("subscription")=="active"]
-    mrr = sum({"starter":2999,"pro":4999,"enterprise":9999}.get(r.get("plan","starter"),2999) for r in active)
+    mrr    = sum({"starter":2999,"pro":4999,"enterprise":9999}.get(r.get("plan","starter"),2999) for r in active)
+    payout = get_payout_summary()
     return jsonify({
-        "platform": "FoodieBot by NexoraAI",
-        "total_restaurants": len(RESTAURANTS),
-        "active": len(active),
-        "monthly_revenue": f"₹{mrr:,}",
-        "annual_revenue": f"₹{mrr*12:,}",
+        "platform":              "FoodieBot by NexoraAI",
+        "total_restaurants":     len(RESTAURANTS),
+        "active_subscriptions":  len(active),
+        "subscription_revenue":  f"₹{mrr:,}/month",
+        "annual_subscription":   f"₹{mrr*12:,}/year",
+        "total_orders_today":    len(order_history),
+        "platform_commission_earned": f"₹{payout['platform_earnings']:,}",
+        "pending_restaurant_payouts": f"₹{payout['total_pending']:,}",
         "restaurants": [{"id":r["id"],"name":r["name"],"plan":r.get("plan"),"area":r["area"]} for r in active]
     })
 
