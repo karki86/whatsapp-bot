@@ -1,570 +1,783 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 import requests
 import os
-import json
-from datetime import datetime
 import random
+import json
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
+MASTER_KEY  = os.environ.get("MASTER_KEY", "NEXORAAI2026")   # Admin access
 
-# ── Restaurant Configuration ──────────────────────────────────────────────────
-RESTAURANT = {
-    "name": "Thenmanan Restaurant",
-    "location": "23/7, Usman Road, T Nagar, Chennai 600 017",
-    "phone": "+91 90000 11223",
-    "hours": "11:00 AM to 11:00 PM (Daily)",
-    "breakfast": "7:30 AM to 11:00 AM",
-    "upi": "thenmanan@upi",
-    "delivery_radius": "5 km",
-    "delivery_time": "45 minutes",
-    "min_order": 150,
-    "rating": "4.8",
-    "total_reviews": "1,240",
-    "established": "1990"
+# ════════════════════════════════════════════════════════════════════════════
+# MULTI-RESTAURANT DATABASE  (replace with real DB in production)
+# Each restaurant pays ₹5,000/month subscription
+# ════════════════════════════════════════════════════════════════════════════
+RESTAURANTS = {
+    # ── Restaurant 1 ──────────────────────────────────────────────────────
+    "whatsapp:+917010624989": {
+        "id": "R001",
+        "name": "Thenmanan Restaurant",
+        "tagline": "Authentic Chennai Cuisine Since 1990",
+        "location": "23/7, Usman Road, T Nagar, Chennai 600 017",
+        "phone": "+91 90000 11223",
+        "hours": "11:00 AM – 11:00 PM",
+        "breakfast": "7:30 AM – 11:00 AM",
+        "gpay": "thenmanan@okicici",
+        "phonepe": "thenmanan@ybl",
+        "upi": "thenmanan@upi",
+        "card_link": "https://rzp.io/l/thenmanan",
+        "delivery_km": 5,
+        "delivery_mins": 45,
+        "delivery_charge": 40,
+        "min_order": 150,
+        "rating": 4.8,
+        "reviews_count": "1,240",
+        "established": "1990",
+        "cuisine": "South Indian",
+        "subscription": "active",
+        "plan": "pro",
+        "plan_expiry": "2026-06-01",
+        "menu": {
+            "🍗 Biryani": {
+                "Chicken Biryani":        {"price":280,"rating":4.9,"orders":2840,"spice":"Medium","time":"20 mins"},
+                "Mutton Biryani":         {"price":320,"rating":4.8,"orders":1920,"spice":"Medium","time":"25 mins"},
+                "Prawn Biryani":          {"price":350,"rating":4.7,"orders":980, "spice":"Medium-Hot","time":"25 mins"},
+                "Vegetable Biryani":      {"price":180,"rating":4.5,"orders":640, "spice":"Mild","time":"15 mins"},
+                "Egg Biryani":            {"price":200,"rating":4.6,"orders":760, "spice":"Medium","time":"15 mins"},
+                "Semiya Chicken Biryani": {"price":260,"rating":4.8,"orders":1100,"spice":"Medium","time":"20 mins"},
+            },
+            "🥩 Non-Veg Mains": {
+                "Pepper Chicken Masala":  {"price":280,"rating":4.9,"orders":2100,"spice":"Hot","time":"15 mins"},
+                "Chicken Butter Masala":  {"price":300,"rating":4.7,"orders":1400,"spice":"Mild","time":"15 mins"},
+                "Mutton Kulambu":         {"price":340,"rating":4.8,"orders":980, "spice":"Hot","time":"20 mins"},
+                "Fish Curry":             {"price":260,"rating":4.6,"orders":840, "spice":"Medium-Hot","time":"15 mins"},
+                "Chicken 65":             {"price":260,"rating":4.8,"orders":1680,"spice":"Hot","time":"15 mins"},
+            },
+            "🥬 Veg Mains": {
+                "Paneer Butter Masala":   {"price":220,"rating":4.6,"orders":840,"spice":"Mild","time":"15 mins"},
+                "Dal Tadka":              {"price":160,"rating":4.5,"orders":620,"spice":"Mild","time":"10 mins"},
+                "Palak Paneer":           {"price":200,"rating":4.5,"orders":560,"spice":"Mild","time":"15 mins"},
+            },
+            "🫓 Breads & Rice": {
+                "Parotta":       {"price":25,"rating":4.7,"orders":2400,"spice":"None","time":"8 mins"},
+                "Butter Naan":   {"price":40,"rating":4.6,"orders":1800,"spice":"None","time":"10 mins"},
+                "Steamed Rice":  {"price":60,"rating":4.4,"orders":1600,"spice":"None","time":"10 mins"},
+                "Ghee Rice":     {"price":80,"rating":4.6,"orders":980, "spice":"None","time":"12 mins"},
+            },
+            "🥟 Starters": {
+                "Chicken Samosa (2pcs)":  {"price":80, "rating":4.8,"orders":2100,"spice":"Medium","time":"10 mins"},
+                "Fish Fry":               {"price":240,"rating":4.9,"orders":1600,"spice":"Medium-Hot","time":"15 mins"},
+                "Chicken 65 Starter":     {"price":220,"rating":4.8,"orders":1800,"spice":"Hot","time":"12 mins"},
+            },
+            "🍦 Desserts & Drinks": {
+                "Special Falooda": {"price":120,"rating":4.9,"orders":1840,"spice":"None","time":"5 mins"},
+                "Mango Lassi":     {"price":80, "rating":4.7,"orders":1100,"spice":"None","time":"5 mins"},
+                "Masala Chai":     {"price":40, "rating":4.5,"orders":1800,"spice":"None","time":"3 mins"},
+            },
+            "🌅 Breakfast": {
+                "Idiyappam + Paya":       {"price":180,"rating":4.9,"orders":2400,"spice":"Medium","time":"10 mins"},
+                "Idly (4pcs) + Sambar":   {"price":80, "rating":4.7,"orders":1800,"spice":"Mild","time":"8 mins"},
+                "Dosa + Chutney":         {"price":90, "rating":4.8,"orders":2100,"spice":"Mild","time":"8 mins"},
+            },
+        },
+        "offers": {
+            "WELCOME10":    {"discount":10,"type":"percent","desc":"10% off first order","min":200},
+            "FLAT50":       {"discount":50,"type":"flat","desc":"₹50 off above ₹300","min":300},
+            "BIRYANI20":    {"discount":20,"type":"percent","desc":"20% off Biryani","min":280},
+            "THENMANAN":    {"discount":100,"type":"flat","desc":"₹100 off above ₹500","min":500},
+            "FREEDELIVERY": {"discount":40,"type":"delivery","desc":"Free delivery","min":200},
+        },
+        "reviews": {
+            "general": [
+                {"name":"Ravi K","rating":5,"cat":"Delivery","date":"Yesterday","text":"Ordered at 8pm, arrived at 8:42pm still hot! Packaging excellent 🚀"},
+                {"name":"Priya S","rating":5,"cat":"Taste","date":"2 days ago","text":"Authentic Chennai flavours! Reminds me of home cooking 🏠"},
+                {"name":"Sundar V","rating":5,"cat":"Quality","date":"3 days ago","text":"Consistent quality every time. Family's favourite restaurant! ⭐⭐⭐⭐⭐"},
+                {"name":"Meena R","rating":5,"cat":"Value","date":"5 days ago","text":"Great value for money! Portions generous, quality top notch 💰"},
+            ],
+            "dishes": {
+                "Chicken Biryani": [
+                    {"name":"Arjun M","rating":5,"date":"2 days ago","text":"Best biryani in Chennai! Delivered hot within 40 mins 🔥","verified":True},
+                    {"name":"Kavitha T","rating":5,"date":"1 week ago","text":"Ordered for office lunch. Everyone loved it! ⭐","verified":True},
+                ],
+                "Idiyappam + Paya": [
+                    {"name":"Senthil K","rating":5,"date":"Today","text":"Drive 20km every Sunday for this! Legendary broth 🙏","verified":True},
+                ],
+            }
+        }
+    },
+
+    # ── Restaurant 2 — HelloFoodie ─────────────────────────────────────────
+    "whatsapp:+919876543210": {
+        "id": "R002",
+        "name": "HelloFoodie Restaurant",
+        "tagline": "Modern Flavours, Traditional Heart",
+        "location": "14/2, 4th Avenue, Anna Nagar, Chennai 600 040",
+        "phone": "+91 98765 43210",
+        "hours": "10:00 AM – 11:00 PM",
+        "breakfast": "8:00 AM – 11:00 AM",
+        "gpay": "hellofoodie@okicici",
+        "phonepe": "hellofoodie@ybl",
+        "upi": "hellofoodie@upi",
+        "card_link": "https://rzp.io/l/hellofoodie",
+        "delivery_km": 6,
+        "delivery_mins": 40,
+        "delivery_charge": 35,
+        "min_order": 200,
+        "rating": 4.6,
+        "reviews_count": "860",
+        "established": "2018",
+        "cuisine": "Multi-Cuisine",
+        "subscription": "active",
+        "plan": "starter",
+        "plan_expiry": "2026-06-01",
+        "menu": {
+            "🍕 Italian": {
+                "Margherita Pizza":  {"price":299,"rating":4.7,"orders":980,"spice":"Mild","time":"20 mins"},
+                "Pepperoni Pizza":   {"price":349,"rating":4.8,"orders":1200,"spice":"Medium","time":"20 mins"},
+                "Pasta Arrabbiata": {"price":249,"rating":4.6,"orders":740,"spice":"Medium-Hot","time":"15 mins"},
+            },
+            "🍔 American": {
+                "Chicken Burger":    {"price":199,"rating":4.7,"orders":1400,"spice":"Medium","time":"12 mins"},
+                "Veg Burger":        {"price":149,"rating":4.5,"orders":840,"spice":"Mild","time":"10 mins"},
+                "French Fries":      {"price":99, "rating":4.6,"orders":2100,"spice":"None","time":"8 mins"},
+            },
+            "🍛 Indian": {
+                "Butter Chicken":    {"price":280,"rating":4.8,"orders":1100,"spice":"Mild","time":"15 mins"},
+                "Dal Makhani":       {"price":220,"rating":4.6,"orders":680,"spice":"Mild","time":"15 mins"},
+                "Chicken Biryani":   {"price":260,"rating":4.7,"orders":1800,"spice":"Medium","time":"20 mins"},
+            },
+            "🥤 Drinks": {
+                "Cold Coffee":       {"price":99, "rating":4.7,"orders":1600,"spice":"None","time":"5 mins"},
+                "Fresh Juice":       {"price":80, "rating":4.5,"orders":980,"spice":"None","time":"5 mins"},
+                "Milkshake":         {"price":120,"rating":4.6,"orders":760,"spice":"None","time":"5 mins"},
+            },
+        },
+        "offers": {
+            "HELLO20":      {"discount":20,"type":"percent","desc":"20% off first order","min":300},
+            "FLAT100":      {"discount":100,"type":"flat","desc":"₹100 off above ₹500","min":500},
+            "FREEDELIVERY": {"discount":35,"type":"delivery","desc":"Free delivery","min":300},
+        },
+        "reviews": {
+            "general": [
+                {"name":"Anand P","rating":5,"cat":"Taste","date":"Yesterday","text":"Amazing pizza! Best in Anna Nagar 🍕"},
+                {"name":"Divya R","rating":4,"cat":"Delivery","date":"2 days ago","text":"Fast delivery, food arrived hot and fresh! 🚀"},
+            ],
+            "dishes": {}
+        }
+    },
 }
 
-# ── Full Menu ─────────────────────────────────────────────────────────────────
-MENU = {
-    "🍗 Biryani": {
-        "Chicken Biryani": {"price": 280, "rating": 4.9, "orders": 2840, "spice": "Medium", "time": "20 mins"},
-        "Mutton Biryani": {"price": 320, "rating": 4.8, "orders": 1920, "spice": "Medium", "time": "25 mins"},
-        "Prawn Biryani": {"price": 350, "rating": 4.7, "orders": 980, "spice": "Medium-Hot", "time": "25 mins"},
-        "Vegetable Biryani": {"price": 180, "rating": 4.5, "orders": 640, "spice": "Mild", "time": "15 mins"},
-        "Egg Biryani": {"price": 200, "rating": 4.6, "orders": 760, "spice": "Medium", "time": "15 mins"},
-        "Semiya Chicken Biryani": {"price": 260, "rating": 4.8, "orders": 1100, "spice": "Medium", "time": "20 mins"},
+# ════════════════════════════════════════════════════════════════════════════
+# SUBSCRIPTION PLANS
+# ════════════════════════════════════════════════════════════════════════════
+PLANS = {
+    "starter": {
+        "name": "Starter",
+        "price": 2999,
+        "features": ["WhatsApp Bot", "Menu Display", "Basic Orders", "1 Payment Method", "Email Support"],
+        "max_items": 20,
+        "max_offers": 2,
+        "ai_replies": False,
     },
-    "🥩 Non-Veg Mains": {
-        "Pepper Chicken Masala": {"price": 280, "rating": 4.9, "orders": 2100, "spice": "Hot", "time": "15 mins"},
-        "Chicken Butter Masala": {"price": 300, "rating": 4.7, "orders": 1400, "spice": "Mild", "time": "15 mins"},
-        "Mutton Kulambu": {"price": 340, "rating": 4.8, "orders": 980, "spice": "Hot", "time": "20 mins"},
-        "Fish Curry": {"price": 260, "rating": 4.6, "orders": 840, "spice": "Medium-Hot", "time": "15 mins"},
-        "Prawn Masala": {"price": 320, "rating": 4.7, "orders": 720, "spice": "Hot", "time": "15 mins"},
-        "Chicken 65": {"price": 260, "rating": 4.8, "orders": 1680, "spice": "Hot", "time": "15 mins"},
+    "pro": {
+        "name": "Pro",
+        "price": 4999,
+        "features": ["Everything in Starter", "AI Smart Replies", "All Payment Methods", "Coupon System", "Reviews & Ratings", "Table Booking", "Priority Support"],
+        "max_items": 100,
+        "max_offers": 10,
+        "ai_replies": True,
     },
-    "🥬 Veg Mains": {
-        "Paneer Butter Masala": {"price": 220, "rating": 4.6, "orders": 840, "spice": "Mild", "time": "15 mins"},
-        "Dal Tadka": {"price": 160, "rating": 4.5, "orders": 620, "spice": "Mild", "time": "10 mins"},
-        "Mixed Veg Curry": {"price": 180, "rating": 4.4, "orders": 480, "spice": "Mild", "time": "12 mins"},
-        "Palak Paneer": {"price": 200, "rating": 4.5, "orders": 560, "spice": "Mild", "time": "15 mins"},
+    "enterprise": {
+        "name": "Enterprise",
+        "price": 9999,
+        "features": ["Everything in Pro", "Multiple Locations", "Custom Bot Name", "Analytics Dashboard", "Dedicated Manager", "White Label"],
+        "max_items": 999,
+        "max_offers": 999,
+        "ai_replies": True,
     },
-    "🫓 Breads & Rice": {
-        "Tandoori Roti": {"price": 30, "rating": 4.5, "orders": 2200, "spice": "None", "time": "10 mins"},
-        "Butter Naan": {"price": 40, "rating": 4.6, "orders": 1800, "spice": "None", "time": "10 mins"},
-        "Parotta": {"price": 25, "rating": 4.7, "orders": 2400, "spice": "None", "time": "8 mins"},
-        "Steamed Rice": {"price": 60, "rating": 4.4, "orders": 1600, "spice": "None", "time": "10 mins"},
-        "Ghee Rice": {"price": 80, "rating": 4.6, "orders": 980, "spice": "None", "time": "12 mins"},
-    },
-    "🥟 Starters": {
-        "Chicken Samosa (2pcs)": {"price": 80, "rating": 4.8, "orders": 2100, "spice": "Medium", "time": "10 mins"},
-        "Mutton Samosa (2pcs)": {"price": 90, "rating": 4.7, "orders": 1400, "spice": "Medium", "time": "10 mins"},
-        "Chicken 65 Starter": {"price": 220, "rating": 4.8, "orders": 1800, "spice": "Hot", "time": "12 mins"},
-        "Fish Fry": {"price": 240, "rating": 4.9, "orders": 1600, "spice": "Medium-Hot", "time": "15 mins"},
-        "Prawn Fry": {"price": 280, "rating": 4.7, "orders": 920, "spice": "Medium", "time": "15 mins"},
-        "Vegetable Soup": {"price": 120, "rating": 4.4, "orders": 480, "spice": "Mild", "time": "10 mins"},
-    },
-    "🍦 Desserts & Drinks": {
-        "Special Falooda": {"price": 120, "rating": 4.9, "orders": 1840, "spice": "None", "time": "5 mins"},
-        "Gulab Jamun": {"price": 80, "rating": 4.7, "orders": 1200, "spice": "None", "time": "5 mins"},
-        "Ice Cream": {"price": 100, "rating": 4.6, "orders": 960, "spice": "None", "time": "3 mins"},
-        "Fresh Lime Soda": {"price": 60, "rating": 4.6, "orders": 1400, "spice": "None", "time": "3 mins"},
-        "Mango Lassi": {"price": 80, "rating": 4.7, "orders": 1100, "spice": "None", "time": "5 mins"},
-        "Masala Chai": {"price": 40, "rating": 4.5, "orders": 1800, "spice": "None", "time": "3 mins"},
-    },
-    "🌅 Breakfast (7:30AM-11AM)": {
-        "Idiyappam + Paya": {"price": 180, "rating": 4.9, "orders": 2400, "spice": "Medium", "time": "10 mins"},
-        "Idly (4pcs) + Sambar": {"price": 80, "rating": 4.7, "orders": 1800, "spice": "Mild", "time": "8 mins"},
-        "Dosa + Chutney": {"price": 90, "rating": 4.8, "orders": 2100, "spice": "Mild", "time": "8 mins"},
-        "Puri + Masala": {"price": 100, "rating": 4.6, "orders": 1400, "spice": "Mild", "time": "10 mins"},
-        "Upma": {"price": 70, "rating": 4.5, "orders": 980, "spice": "Mild", "time": "8 mins"},
-    }
 }
 
-# ── Customer Reviews Database ─────────────────────────────────────────────────
-REVIEWS = {
-    "Chicken Biryani": [
-        {"name": "Ravi K", "rating": 5, "date": "2 days ago", "review": "Best biryani in Chennai! The aroma is incredible and mutton is so tender. Delivered hot within 40 minutes. Will order again! 🔥", "verified": True},
-        {"name": "Priya S", "rating": 5, "date": "1 week ago", "review": "Ordered for office lunch. Everyone loved it! The spice level is perfect. Packaging was also neat. Highly recommend! ⭐", "verified": True},
-        {"name": "Arjun M", "rating": 4, "date": "2 weeks ago", "review": "Really good biryani. Portion size is generous. Delivery was on time. Definitely coming back! 👍", "verified": True},
-    ],
-    "Mutton Biryani": [
-        {"name": "Sundar V", "rating": 5, "date": "3 days ago", "review": "Absolutely divine! The mutton was fall-off-the-bone tender. This is authentic Dum Biryani. Worth every rupee! 🍛", "verified": True},
-        {"name": "Meena R", "rating": 5, "date": "5 days ago", "review": "Ordered for my husband's birthday. He loved it so much! The flavours are authentic and reminds me of home cooking 💕", "verified": True},
-        {"name": "Kumar T", "rating": 4, "date": "1 week ago", "review": "Very tasty. Good quantity. Delivery was slightly delayed but food quality made up for it. Will order again!", "verified": True},
-    ],
-    "Fish Fry": [
-        {"name": "Anand P", "rating": 5, "date": "1 day ago", "review": "Fresh fish, perfectly marinated! Crispy outside, juicy inside. Best fish fry I have had outside of home! 🐟", "verified": True},
-        {"name": "Lakshmi N", "rating": 5, "date": "4 days ago", "review": "Outstanding! The spice blend is perfect. You can tell they use fresh fish. Will order every week now! 🌶️", "verified": True},
-    ],
-    "Idiyappam + Paya": [
-        {"name": "Senthil K", "rating": 5, "date": "Today", "review": "I drive 20km every Sunday for this! The Paya broth is so rich and flavorful. Idiyappam is perfectly soft. Legendary! 🙏", "verified": True},
-        {"name": "Kavitha M", "rating": 5, "date": "Yesterday", "review": "This is the real deal! Authentic Chennai breakfast. The Paya has that slow-cooked depth of flavour. Simply outstanding!", "verified": True},
-    ],
-    "Special Falooda": [
-        {"name": "Divya R", "rating": 5, "date": "3 days ago", "review": "Best Falooda in T Nagar! The rose syrup is so fragrant and ice cream is fresh. Perfect ending to a meal! 🍦", "verified": True},
-        {"name": "Raj Kumar", "rating": 5, "date": "1 week ago", "review": "My kids absolutely love the Falooda here. Always fresh, always perfect. A must-try dessert! ❤️", "verified": True},
-    ],
-    "Pepper Chicken Masala": [
-        {"name": "Babu N", "rating": 5, "date": "2 days ago", "review": "The pepper hits you perfectly without being overwhelming. Chicken is well-cooked and gravy is thick. Pure perfection! 🌶️", "verified": True},
-        {"name": "Shanthi K", "rating": 5, "date": "4 days ago", "review": "My favourite dish here! Order it every time with Parotta. The combination is unbeatable. Highly recommend! 👌", "verified": True},
-    ],
-}
-
-# ── General Reviews ───────────────────────────────────────────────────────────
-GENERAL_REVIEWS = [
-    {"name": "Rajan M", "rating": 5, "date": "Yesterday", "category": "Delivery", "review": "Ordered at 8pm, food arrived at 8:42pm. Still piping hot! Packaging was excellent. Every dish tasted fresh. Impressed! 🚀"},
-    {"name": "Anitha S", "rating": 5, "date": "2 days ago", "category": "Quality", "review": "Consistent quality every single time. Ordered 10+ times and never been disappointed. This is our family's go-to restaurant! ⭐⭐⭐⭐⭐"},
-    {"name": "Krishnan V", "rating": 5, "date": "3 days ago", "category": "Taste", "review": "Authentic Chennai flavours! Takes me back to my grandmother's cooking. No artificial colours or preservatives. Pure homestyle food! 🏠"},
-    {"name": "Nithya P", "rating": 4, "date": "5 days ago", "category": "Value", "review": "Great value for money! Portions are generous and quality is top notch. Better than many expensive restaurants in Chennai! 💰"},
-    {"name": "Manoj K", "rating": 5, "date": "1 week ago", "category": "Service", "review": "Called to add an extra item after ordering — they accommodated immediately! Excellent customer service. Rare to find these days! 👏"},
-    {"name": "Deepa R", "rating": 5, "date": "1 week ago", "category": "Packaging", "review": "Food arrived perfectly packed. Biryani and curry in separate containers. Nothing spilled. Thoughtful packaging! 📦"},
-    {"name": "Suresh B", "rating": 5, "date": "2 weeks ago", "category": "Freshness", "review": "You can taste the freshness in every bite. Vegetables are crisp, meats are tender. Clearly using fresh ingredients daily! 🌿"},
-    {"name": "Lakshmi T", "rating": 4, "date": "2 weeks ago", "category": "Overall", "review": "One of the best restaurants in T Nagar. Consistent taste, good delivery speed, reasonable prices. Thoroughly recommend! 🌟"},
-]
-
-# ── Order Storage ─────────────────────────────────────────────────────────────
-orders = {}
-sessions = {}
+# ════════════════════════════════════════════════════════════════════════════
+# SESSION STORAGE
+# ════════════════════════════════════════════════════════════════════════════
+sessions       = {}
+active_orders  = {}
 pending_reviews = {}
 
-# ── Helper Functions ──────────────────────────────────────────────────────────
-def get_stars(rating):
-    full = int(rating)
-    return "⭐" * full
+# ════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ════════════════════════════════════════════════════════════════════════════
+def get_restaurant(sender):
+    return RESTAURANTS.get(sender)
 
-def find_item(item_name):
-    item_lower = item_name.lower()
-    for category, items in MENU.items():
-        for item, details in items.items():
-            if item_lower in item.lower() or item.lower() in item_lower:
-                return item, details
+def is_subscription_active(r):
+    if r.get("subscription") != "active":
+        return False
+    expiry = r.get("plan_expiry","2020-01-01")
+    return datetime.strptime(expiry, "%Y-%m-%d") >= datetime.now()
+
+def get_stars(rating):
+    return "⭐" * int(rating)
+
+def gen_order_id(rid):
+    return f"{rid}-{datetime.now().strftime('%d%m%H%M')}{random.randint(10,99)}"
+
+def find_item(r, name):
+    name_l = name.lower()
+    for cat, items in r["menu"].items():
+        for item, d in items.items():
+            if name_l in item.lower() or item.lower() in name_l:
+                return item, d
     return None, None
 
-def build_menu_text():
-    text = f"🍽️ *{RESTAURANT['name']} — Full Menu*\n"
-    text += f"⭐ {RESTAURANT['rating']}/5 ({RESTAURANT['total_reviews']} reviews)\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for category, items in MENU.items():
-        text += f"*{category}*\n"
-        for item, details in items.items():
-            stars = get_stars(details['rating'])
-            text += f"  • {item} — ₹{details['price']} {stars}\n"
-        text += "\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    text += "_Type item name for reviews & details_\n"
-    text += f"📍 {RESTAURANT['location']}\n"
-    text += f"🕐 {RESTAURANT['hours']}\n"
-    return text
+def apply_coupon(r, code, subtotal):
+    code = code.upper().strip()
+    offers = r.get("offers", {})
+    if code not in offers:
+        return None, "❌ Invalid coupon. Type *offers* to see valid codes."
+    o = offers[code]
+    if subtotal < o["min"]:
+        return None, f"❌ Min order ₹{o['min']} needed. Your total: ₹{subtotal}."
+    if o["type"] == "percent":
+        disc = int(subtotal * o["discount"] / 100)
+        return disc, f"✅ *{code}* applied! {o['discount']}% off = ₹{disc} saved 🎉"
+    if o["type"] == "flat":
+        return o["discount"], f"✅ *{code}* applied! ₹{o['discount']} flat off 🎉"
+    if o["type"] == "delivery":
+        return r["delivery_charge"], f"✅ *{code}* applied! Free delivery 🎉"
+    return None, "❌ Invalid coupon."
 
-def get_item_reviews(item_name):
-    actual_name, details = find_item(item_name)
-    if not actual_name:
-        return None
+# ════════════════════════════════════════════════════════════════════════════
+# MENU BUILDER
+# ════════════════════════════════════════════════════════════════════════════
+def build_menu(r):
+    t  = f"🍽️ *{r['name']} — Menu*\n"
+    t += f"⭐ {r['rating']}/5 ({r['reviews_count']} reviews)\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for cat, items in r["menu"].items():
+        t += f"*{cat}*\n"
+        for item, d in items.items():
+            t += f"  • {item} — ₹{d['price']} {get_stars(d['rating'])}\n"
+        t += "\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "💰 Type *offers* for today's deals!\n"
+    t += f"📍 {r['location']}\n"
+    return t
 
-    reviews = REVIEWS.get(actual_name, [])
-    text = f"📊 *{actual_name} — Details & Reviews*\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += f"💰 Price: ₹{details['price']}\n"
-    text += f"⭐ Rating: {details['rating']}/5\n"
-    text += f"📦 Orders: {details['orders']:,}+ served\n"
-    text += f"🌶️ Spice Level: {details['spice']}\n"
-    text += f"⏱️ Prep Time: {details['time']}\n\n"
+def build_offers(r):
+    t  = "🎉 *Today's Special Offers*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for code, o in r.get("offers", {}).items():
+        t += f"🏷️ *{code}*\n   {o['desc']}\n   Min order: ₹{o['min']}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "Apply coupon when ordering!\nType *order* to start 🛒"
+    return t
 
-    if reviews:
-        text += f"*Customer Reviews ({len(reviews)})*\n"
-        text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-        for rev in reviews[:3]:
-            verified = "✅ Verified" if rev["verified"] else ""
-            text += f"\n{get_stars(rev['rating'])} *{rev['name']}* {verified}\n"
-            text += f"_{rev['date']}_\n"
-            text += f"{rev['review']}\n"
-    else:
-        text += "⭐ Be the first to review this item!\n"
+def build_payment_msg(r, order_id, subtotal, discount, coupon_type, name):
+    delivery = 0 if coupon_type == "delivery" else r["delivery_charge"]
+    total = subtotal - discount + delivery
 
-    text += f"\n━━━━━━━━━━━━━━━━━━━━━━\n"
-    text += f"Want to order? Reply:\n_'Order {actual_name}'_ 🛒"
-    return text
+    t  = f"✅ *Order Summary*\n"
+    t += f"Order ID: *{order_id}*\n"
+    t += f"Customer: {name}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"📦 Subtotal:    ₹{subtotal}\n"
+    if discount > 0:
+        t += f"🎉 Discount:   -₹{discount}\n"
+    t += f"🛵 Delivery:    ₹{delivery}\n"
+    t += f"💰 *Total:      ₹{total}*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    t += "*Choose Payment Method:*\n\n"
+    t += f"1️⃣ *Google Pay*\n"
+    t += f"   Send ₹{total} to: `{r['gpay']}`\n\n"
+    t += f"2️⃣ *PhonePe*\n"
+    t += f"   Send ₹{total} to: `{r['phonepe']}`\n\n"
+    t += f"3️⃣ *Paytm / Any UPI*\n"
+    t += f"   UPI ID: `{r['upi']}`\n\n"
+    t += f"4️⃣ *Credit / Debit Card*\n"
+    t += f"   Pay here 👉 {r['card_link']}\n\n"
+    t += f"5️⃣ *Cash on Delivery*\n"
+    t += f"   Pay ₹{total} to delivery person 💵\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "📸 After UPI/Card payment:\nShare screenshot to confirm! ✅\n\n"
+    t += f"⏱️ Estimated delivery: {r['delivery_mins']} mins\n"
+    t += f"📞 Help: {r['phone']}"
+    return t, total
 
-def get_general_reviews(category=None):
+# ════════════════════════════════════════════════════════════════════════════
+# REVIEWS
+# ════════════════════════════════════════════════════════════════════════════
+def build_general_reviews(r, category=None):
+    rev_list = r["reviews"]["general"]
     if category:
-        filtered = [r for r in GENERAL_REVIEWS if category.lower() in r["category"].lower()]
-        reviews_to_show = filtered if filtered else GENERAL_REVIEWS[:4]
+        rev_list = [x for x in rev_list if category.lower() in x["cat"].lower()] or rev_list[:3]
     else:
-        reviews_to_show = random.sample(GENERAL_REVIEWS, min(4, len(GENERAL_REVIEWS)))
+        rev_list = random.sample(rev_list, min(3, len(rev_list)))
 
-    text = f"⭐ *{RESTAURANT['name']} — Customer Reviews*\n"
-    text += f"Overall Rating: {RESTAURANT['rating']}/5 ({RESTAURANT['total_reviews']} reviews)\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    t  = f"⭐ *{r['name']} — Reviews*\n"
+    t += f"Rating: {r['rating']}/5 ({r['reviews_count']} reviews)\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for rev in rev_list:
+        t += f"{get_stars(rev['rating'])} *{rev['name']}* — _{rev['cat']}_\n"
+        t += f"_{rev['date']}_\n{rev['text']}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "• *reviews delivery* — Delivery\n"
+    t += "• *reviews taste* — Taste\n"
+    t += "• *review [dish]* — Dish review\n"
+    t += "• *add review* — Share yours 📝\n"
+    return t
 
-    for rev in reviews_to_show:
-        text += f"{get_stars(rev['rating'])} *{rev['name']}* — _{rev['category']}_\n"
-        text += f"_{rev['date']}_\n"
-        text += f"{rev['review']}\n\n"
+def build_dish_review(r, dish_name):
+    actual, details = find_item(r, dish_name)
+    if not actual:
+        return None
+    dish_reviews = r["reviews"]["dishes"].get(actual, [])
+    t  = f"📊 *{actual} — Details*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    t += f"💰 Price: ₹{details['price']}\n"
+    t += f"⭐ Rating: {details['rating']}/5\n"
+    t += f"📦 {details['orders']:,}+ orders\n"
+    t += f"🌶️ Spice: {details['spice']}\n"
+    t += f"⏱️ Prep: {details['time']}\n\n"
+    if dish_reviews:
+        t += "*Customer Reviews:*\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        for rev in dish_reviews[:2]:
+            v = "✅ Verified" if rev.get("verified") else ""
+            t += f"\n{get_stars(rev['rating'])} *{rev['name']}* {v}\n"
+            t += f"_{rev['date']}_\n{rev['text']}\n"
+    else:
+        t += "⭐ Be the first to review!\n"
+    t += f"\n━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"Type *order {actual}* to add to cart 🛒"
+    return t
 
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    text += "📝 Type:\n"
-    text += "• *reviews delivery* — Delivery reviews\n"
-    text += "• *reviews taste* — Taste reviews\n"
-    text += "• *reviews quality* — Quality reviews\n"
-    text += "• *review [dish name]* — Dish reviews\n"
-    text += "• *add review* — Share your experience\n"
-    return text
-
-def get_top_dishes():
-    all_items = []
-    for category, items in MENU.items():
-        for item, details in items.items():
-            all_items.append((item, details, category))
-
-    top = sorted(all_items, key=lambda x: (x[1]['rating'], x[1]['orders']), reverse=True)[:8]
-
-    text = "🏆 *Top Rated Dishes*\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i, (item, details, cat) in enumerate(top, 1):
-        text += f"{i}. *{item}*\n"
-        text += f"   {get_stars(details['rating'])} {details['rating']}/5 | ₹{details['price']} | {details['orders']:,}+ orders\n"
-        text += f"   🌶️ {details['spice']} | ⏱️ {details['time']}\n\n"
-
-    text += "_Type any dish name to see reviews & order!_"
-    return text
-
-def get_bestsellers():
-    all_items = []
-    for category, items in MENU.items():
-        for item, details in items.items():
-            all_items.append((item, details))
-
-    bestsellers = sorted(all_items, key=lambda x: x[1]['orders'], reverse=True)[:5]
-
-    text = "🔥 *Our Bestsellers*\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for item, details in bestsellers:
-        text += f"⭐ *{item}*\n"
-        text += f"   ₹{details['price']} | {details['rating']}/5 | {details['orders']:,}+ orders\n\n"
-
-    text += "_These are our most loved dishes!_\n"
-    text += "Type dish name to order or see reviews 😊"
-    return text
-
-def handle_add_review(sender, text):
-    text_lower = text.lower()
-
+def handle_add_review(r, sender, text):
     if sender not in pending_reviews:
         pending_reviews[sender] = {"step": "dish"}
-        return """📝 *Share Your Review*
-
-We'd love to hear your feedback!
-
-Which dish would you like to review?
-(Type the dish name or type *'overall'* for general feedback)"""
-
-    step = pending_reviews[sender].get("step")
-
+        return "📝 *Share Your Review*\n\nWhich dish would you like to review?\n(Type dish name or *overall*)"
+    step = pending_reviews[sender]["step"]
     if step == "dish":
         pending_reviews[sender]["dish"] = text
         pending_reviews[sender]["step"] = "rating"
-        return f"""Thanks! Reviewing: *{text}*
-
-Please rate your experience:
-1️⃣ - Poor
-2️⃣ - Below Average
-3️⃣ - Good
-4️⃣ - Very Good
-5️⃣ - Excellent
-
-Reply with a number (1-5) ⭐"""
-
+        return f"Reviewing: *{text}*\n\nRate 1-5:\n1️⃣ Poor  2️⃣ Below Avg  3️⃣ Good\n4️⃣ Very Good  5️⃣ Excellent ⭐"
     if step == "rating":
         try:
             rating = int(text.strip())
             if 1 <= rating <= 5:
                 pending_reviews[sender]["rating"] = rating
                 pending_reviews[sender]["step"] = "review"
-                stars = get_stars(rating)
-                return f"""You rated: {stars} ({rating}/5)
-
-Now please share your experience in a few words:
-(What did you like? Taste, delivery speed, packaging, freshness?)
-
-_Your honest feedback helps other customers!_ 🙏"""
+                return f"Rated: {get_stars(rating)} ({rating}/5)\n\nShare your experience in a few words 🙏"
         except:
             pass
-        return "Please reply with a number between 1 and 5 ⭐"
-
+        return "Please reply with 1-5 ⭐"
     if step == "review":
-        dish = pending_reviews[sender].get("dish", "Overall")
+        dish   = pending_reviews[sender].get("dish", "Overall")
         rating = pending_reviews[sender].get("rating", 5)
-        review_text = text
-        stars = get_stars(rating)
-
         del pending_reviews[sender]
-
         return f"""✅ *Thank You for Your Review!*
 
-*{dish}* — {stars} ({rating}/5)
-_{review_text}_
+*{dish}* — {get_stars(rating)} ({rating}/5)
+_{text}_
 
-Your feedback has been submitted and helps other customers make better choices! 🙏
+Your feedback helps other customers! 🙏
+🎁 *Show this for a FREE Masala Chai on next visit!* ☕
 
-*As a token of appreciation, show this message on your next visit for a FREE Masala Chai!* ☕
-
-— Team {RESTAURANT['name']} ❤️"""
-
+— Team {r['name']} ❤️"""
     del pending_reviews[sender]
-    return "Thank you for your feedback! 🙏"
+    return "Thank you! 🙏"
 
-def ask_gpt(sender, text):
+# ════════════════════════════════════════════════════════════════════════════
+# GPT — AI SMART REPLY (Pro plan only)
+# ════════════════════════════════════════════════════════════════════════════
+def ask_gpt(r, sender, text):
+    if not OPENAI_KEY:
+        return f"Please call us: {r['phone']} 📞"
+
     sessions.setdefault(sender, [])
-    sessions[sender].append({"role": "user", "content": text})
+    sessions[sender].append({"role":"user","content":text})
     if len(sessions[sender]) > 20:
         sessions[sender] = sessions[sender][-20:]
 
-    menu_str = ""
-    for cat, items in MENU.items():
-        for item, details in items.items():
-            menu_str += f"{item}: Rs{details['price']} (rating {details['rating']}, {details['orders']} orders), "
+    menu_str   = ", ".join([f"{item} Rs{d['price']}" for cat, items in r["menu"].items() for item, d in items.items()])
+    offers_str = ", ".join([f"{code}: {o['desc']}" for code, o in r.get("offers",{}).items()])
 
-    prompt = f"""You are a friendly WhatsApp ordering assistant for {RESTAURANT['name']} in Chennai.
+    system = f"""You are a friendly WhatsApp ordering assistant for {r['name']}, {r['cuisine']} restaurant in Chennai.
 
-FULL MENU WITH RATINGS:
-{menu_str}
+MENU: {menu_str}
+OFFERS: {offers_str}
+PAYMENT: GPay {r['gpay']} | PhonePe {r['phonepe']} | UPI {r['upi']} | Card {r['card_link']} | COD available
+DELIVERY: {r['delivery_mins']} mins | ₹{r['delivery_charge']} charge | Min order ₹{r['min_order']}
+HOURS: {r['hours']} | PHONE: {r['phone']}
 
-RESTAURANT INFO:
-Location: {RESTAURANT['location']}
-Hours: {RESTAURANT['hours']} | Breakfast: {RESTAURANT['breakfast']}
-Phone: {RESTAURANT['phone']}
-UPI: {RESTAURANT['upi']}
-Delivery: Within {RESTAURANT['delivery_radius']} in {RESTAURANT['delivery_time']}
-Min Order: Rs{RESTAURANT['min_order']}
-Rating: {RESTAURANT['rating']}/5 ({RESTAURANT['total_reviews']} reviews)
+ORDERING STEPS:
+1. Confirm items + calculate total
+2. Ask for coupon code (mention 'offers' command)
+3. Ask name + delivery address
+4. Show final bill with discount
+5. Show all payment options with amounts
+6. Confirm after screenshot or COD selection
 
-TASKS:
-- Help browse menu, place orders, book tables
-- Share reviews and ratings when asked
-- For orders: collect name, items, qty, address
-- Show order total and UPI payment details
-- Be friendly with emojis
-- Reply in customer's language (Tamil/English)
-- Recommend dishes based on preferences
-
-PAYMENT: After order confirmed, say:
-"Pay Rs[TOTAL] to UPI: {RESTAURANT['upi']} and share screenshot 📸"
-"""
+RULES: Be friendly, use emojis, reply in customer language (Tamil/English), suggest best-selling dishes, always mention active offers."""
 
     headers = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
     body = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "system", "content": prompt}] + sessions[sender],
+        "messages": [{"role":"system","content":system}] + sessions[sender],
         "max_tokens": 500,
         "temperature": 0.7
     }
+    try:
+        resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=30)
+        if resp.status_code == 200:
+            reply = resp.json()["choices"][0]["message"]["content"]
+            sessions[sender].append({"role":"assistant","content":reply})
+            return reply
+    except Exception as e:
+        print(f"GPT error: {e}")
+    return f"Sorry, please call {r['phone']} 🙏"
 
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=30)
-    if r.status_code == 200:
-        reply = r.json()["choices"][0]["message"]["content"]
-        sessions[sender].append({"role": "assistant", "content": reply})
-        return reply
-    return f"Sorry please call {RESTAURANT['phone']}"
+# ════════════════════════════════════════════════════════════════════════════
+# MESSAGE HANDLER
+# ════════════════════════════════════════════════════════════════════════════
+def handle_message(r, sender, text):
+    t = text.lower().strip()
 
-def handle_message(sender, text):
-    text_lower = text.lower().strip()
-
-    # Handle ongoing review submission
+    # Ongoing review
     if sender in pending_reviews:
-        return handle_add_review(sender, text)
+        return handle_add_review(r, sender, text)
 
-    # Greetings
-    if text_lower in ["hi", "hello", "hey", "hii", "start", "hai", "vanakkam"]:
-        return f"""👋 *Welcome to {RESTAURANT['name']}!*
-⭐ Rated {RESTAURANT['rating']}/5 by {RESTAURANT['total_reviews']} customers
+    # Coupon step
+    if sender in active_orders and active_orders[sender].get("step") == "coupon":
+        order = active_orders[sender]
+        if t in ["skip","no","none"]:
+            active_orders[sender]["step"]      = "payment"
+            active_orders[sender]["discount"]  = 0
+            active_orders[sender]["coup_type"] = None
+            oid = gen_order_id(r["id"])
+            active_orders[sender]["oid"]       = oid
+            msg, total = build_payment_msg(r, oid, order["subtotal"], 0, None, order.get("name","Customer"))
+            active_orders[sender]["total"]     = total
+            return msg
+        disc, msg = apply_coupon(r, text, order["subtotal"])
+        if disc is not None:
+            o = r.get("offers",{}).get(text.upper(),{})
+            active_orders[sender].update({"discount":disc,"coup_type":o.get("type"),"step":"payment"})
+            oid = gen_order_id(r["id"])
+            active_orders[sender]["oid"] = oid
+            pay_msg, total = build_payment_msg(r, oid, order["subtotal"], disc, o.get("type"), order.get("name","Customer"))
+            active_orders[sender]["total"] = total
+            return f"{msg}\n\n{pay_msg}"
+        return f"{msg}\n\nType coupon or *skip* to continue."
 
-How can I help you today?
+    # Payment confirmation step
+    if sender in active_orders and active_orders[sender].get("step") == "payment":
+        order = active_orders[sender]
+        oid   = order.get("oid", gen_order_id(r["id"]))
+        total = order.get("total","?")
+        name  = order.get("name","Customer")
 
-🍽️ *1* — View Full Menu
+        if any(x in t for x in ["cod","cash","5","cash on delivery"]):
+            del active_orders[sender]
+            return f"""✅ *Order Confirmed — Cash on Delivery!*
+Order ID: *{oid}*
+Amount: ₹{total}
+Name: {name}
+
+💵 Keep exact change ready.
+🛵 Delivery in {r['delivery_mins']} mins.
+📞 We'll call before delivery: {r['phone']} ❤️"""
+
+        if any(x in t for x in ["paid","done","sent","transferred","screenshot","payment"]):
+            del active_orders[sender]
+            return f"""✅ *Payment Received — Order Confirmed!*
+Order ID: *{oid}*
+Amount: ₹{total}
+Name: {name}
+
+🎉 Preparing your order now!
+🛵 Delivery in {r['delivery_mins']} mins.
+Enjoy your meal! 🍛❤️
+📞 {r['phone']}"""
+
+    # ── COMMANDS ────────────────────────────────────────────────────────────
+    if t in ["hi","hello","hey","hii","start","hai","vanakkam","வணக்கம்"]:
+        plan = r.get("plan","starter").upper()
+        return f"""👋 *Welcome to {r['name']}!*
+_{r['tagline']}_
+⭐ {r['rating']}/5 ({r['reviews_count']} reviews)
+
+How can I help you?
+
+🍽️ *1* — Full Menu
 🏆 *2* — Top Rated Dishes
-🔥 *3* — Our Bestsellers
-📦 *4* — Place an Order
-📅 *5* — Book a Table
-⭐ *6* — Customer Reviews
-📍 *7* — Location & Hours
-💳 *8* — Payment Info
+🔥 *3* — Bestsellers
+📦 *4* — Place Order
+🎉 *5* — Today's Offers
+📅 *6* — Book a Table
+⭐ *7* — Customer Reviews
+📍 *8* — Location & Hours
+💳 *9* — Payment Methods
 
-_Serving authentic Chennai cuisine since {RESTAURANT['established']}_ 🌟"""
+_Serving {r['cuisine']} since {r['established']}_ 🌟"""
 
-    # Menu
-    if text_lower in ["1", "menu", "show menu", "full menu"]:
-        return build_menu_text()
+    if t in ["1","menu","show menu","full menu"]:
+        return build_menu(r)
 
-    # Top rated
-    if text_lower in ["2", "top rated", "top dishes", "best dishes", "best food"]:
-        return get_top_dishes()
+    if t in ["2","top rated","best dishes"]:
+        items = [(item,d) for cat,its in r["menu"].items() for item,d in its.items()]
+        top   = sorted(items, key=lambda x: (x[1]['rating'],x[1]['orders']), reverse=True)[:8]
+        txt   = "🏆 *Top Rated Dishes*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for i,(item,d) in enumerate(top,1):
+            txt += f"{i}. *{item}* — ₹{d['price']}\n   {get_stars(d['rating'])} {d['rating']}/5 | {d['orders']:,}+ orders\n\n"
+        return txt
 
-    # Bestsellers
-    if text_lower in ["3", "bestseller", "bestsellers", "popular", "most ordered"]:
-        return get_bestsellers()
+    if t in ["3","bestsellers","popular","most ordered"]:
+        items = [(item,d) for cat,its in r["menu"].items() for item,d in its.items()]
+        top   = sorted(items, key=lambda x: x[1]['orders'], reverse=True)[:5]
+        txt   = "🔥 *Our Bestsellers*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for item,d in top:
+            txt += f"⭐ *{item}* — ₹{d['price']}\n   {d['orders']:,}+ orders | {d['rating']}/5\n\n"
+        return txt
 
-    # Order
-    if text_lower in ["4", "order", "place order", "i want to order", "order food"]:
-        return f"""🛒 *Place Your Order*
+    if t in ["4","order","place order","i want to order","order food"]:
+        return f"""🛒 *Place Your Order at {r['name']}*
 
-Tell me what you'd like! For example:
-_"1 Chicken Biryani and 2 Mutton Samosa"_
+Tell me what you'd like! Example:
+_"1 Chicken Biryani and 2 Samosa"_
 
-Or type *menu* to browse first.
+💰 Type *offers* to see today's deals first!
+Min order: ₹{r['min_order']}
+🛵 Delivery in {r['delivery_mins']} mins"""
 
-*Minimum order: ₹{RESTAURANT['min_order']}*
-🛵 Delivery in {RESTAURANT['delivery_time']} within {RESTAURANT['delivery_radius']}"""
+    if t in ["5","offers","coupon","deals","discount","promo"]:
+        return build_offers(r)
 
-    # Table booking
-    if text_lower in ["5", "book table", "book a table", "reservation", "reserve table"]:
-        return f"""📅 *Book a Table*
+    if t in ["6","book table","reservation","book a table","reserve"]:
+        return f"""📅 *Book a Table at {r['name']}*
 
 Please share:
 1️⃣ Your *Name*
-2️⃣ *Date* (e.g. 4 May 2026)
+2️⃣ *Date* (e.g. 5 May 2026)
 3️⃣ *Time* (e.g. 7:30 PM)
 4️⃣ *Number of guests*
-5️⃣ *Occasion*? (Birthday/Anniversary/Business)
+5️⃣ *Occasion*? (Birthday/Anniversary etc)
 
-We'll confirm within 15 minutes! 🎉
+Confirmed within 15 mins! 🎉
+Large groups: {r['phone']}"""
 
-For large groups (15+) call: {RESTAURANT['phone']}"""
+    if t in ["7","reviews","review","feedback","ratings"]:
+        return build_general_reviews(r)
 
-    # Reviews
-    if text_lower in ["6", "reviews", "review", "feedback", "ratings", "what do people say"]:
-        return get_general_reviews()
+    if t in ["8","location","address","where","hours","timing"]:
+        return f"""📍 *Find {r['name']}*
 
-    # Location
-    if text_lower in ["7", "location", "address", "where", "timing", "hours", "time"]:
-        return f"""📍 *Find Us*
+🏠 {r['location']}
+🕐 {r['hours']}
+🌅 Breakfast: {r['breakfast']}
+🛵 Delivery within {r['delivery_km']}km | {r['delivery_mins']} mins
+Min order: ₹{r['min_order']}
+📞 {r['phone']}"""
 
-🏠 *Address:*
-{RESTAURANT['location']}
+    if t in ["9","payment","pay","how to pay","upi"]:
+        return f"""💳 *Payment Methods*
 
-🕐 *Hours:*
-Lunch & Dinner: {RESTAURANT['hours']}
-Breakfast: {RESTAURANT['breakfast']}
+1️⃣ *Google Pay*
+   `{r['gpay']}`
 
-🛵 *Delivery:*
-Within {RESTAURANT['delivery_radius']} | {RESTAURANT['delivery_time']}
-Min order: ₹{RESTAURANT['min_order']}
+2️⃣ *PhonePe*
+   `{r['phonepe']}`
 
-📞 *Call:* {RESTAURANT['phone']}
-🗺️ Maps: https://maps.google.com/?q=T+Nagar+Chennai"""
+3️⃣ *Paytm / Any UPI*
+   `{r['upi']}`
 
-    # Payment
-    if text_lower in ["8", "payment", "pay", "upi", "gpay", "how to pay"]:
-        return f"""💳 *Payment Options*
+4️⃣ *Credit / Debit Card*
+   {r['card_link']}
 
-*UPI ID:* `{RESTAURANT['upi']}`
+5️⃣ *Cash on Delivery*
+   Pay at your door 💵
 
-✅ Google Pay
-✅ PhonePe
-✅ Paytm
-✅ Any UPI App
-✅ Cash on Delivery
+📸 After UPI payment share screenshot here!"""
 
-After UPI payment:
-📸 Share screenshot here to confirm order!
+    if t.startswith("reviews "):
+        return build_general_reviews(r, t.replace("reviews ","").strip())
 
-For cash: Pay at delivery 🚪"""
+    if t.startswith("review "):
+        result = build_dish_review(r, text[7:].strip())
+        return result or ask_gpt(r, sender, text)
 
-    # Review by category
-    if text_lower.startswith("reviews "):
-        category = text_lower.replace("reviews ", "").strip()
-        return get_general_reviews(category)
+    if any(x in t for x in ["add review","write review","give review","leave review"]):
+        return handle_add_review(r, sender, text)
 
-    # Review specific dish
-    if text_lower.startswith("review "):
-        dish = text[7:].strip()
-        result = get_item_reviews(dish)
-        if result:
-            return result
-        return ask_gpt(sender, text)
-
-    # Add review
-    if any(x in text_lower for x in ["add review", "write review", "give review", "leave review", "my review"]):
-        return handle_add_review(sender, text)
-
-    # Check specific dish details
-    actual_name, details = find_item(text)
-    if actual_name and len(text) > 3:
-        result = get_item_reviews(text)
+    # Dish lookup
+    actual, details = find_item(r, text)
+    if actual and len(text) > 3:
+        result = build_dish_review(r, text)
         if result:
             return result
 
-    # Spice level queries
-    if any(x in text_lower for x in ["spicy", "spice", "mild", "hot dish", "not spicy"]):
-        mild_items = []
-        hot_items = []
-        for cat, items in MENU.items():
-            for item, details in items.items():
-                if details['spice'] in ['Mild', 'None']:
-                    mild_items.append(f"{item} (₹{details['price']})")
-                elif details['spice'] in ['Hot', 'Medium-Hot']:
-                    hot_items.append(f"{item} (₹{details['price']})")
+    if any(x in t for x in ["veg","vegetarian","no meat"]):
+        veg = [f"• {item} — ₹{d['price']}" for cat,its in r["menu"].items() for item,d in its.items() if d['spice'] in ['Mild','None']]
+        return "🥬 *Mild / Vegetarian Options*\n\n" + "\n".join(veg[:8]) + "\n\n_All veg dishes prepared separately!_ 🙏"
 
-        text_reply = "🌶️ *Dishes by Spice Level*\n\n"
-        text_reply += "*Mild/Non-Spicy:*\n"
-        for item in mild_items[:6]:
-            text_reply += f"• {item}\n"
-        text_reply += "\n*Medium-Hot/Hot:*\n"
-        for item in hot_items[:6]:
-            text_reply += f"• {item}\n"
-        return text_reply
+    if any(x in t for x in ["spicy","hot","mild","not spicy"]):
+        mild = [f"• {item} (₹{d['price']})" for cat,its in r["menu"].items() for item,d in its.items() if d['spice'] in ['Mild','None']]
+        hot  = [f"• {item} (₹{d['price']})" for cat,its in r["menu"].items() for item,d in its.items() if d['spice'] in ['Hot','Medium-Hot']]
+        return "🌶️ *By Spice Level*\n\n*Mild:*\n" + "\n".join(mild[:5]) + "\n\n*Hot:*\n" + "\n".join(hot[:5])
 
-    # Vegetarian queries
-    if any(x in text_lower for x in ["veg", "vegetarian", "no meat", "veg items"]):
-        veg_items = []
-        for item, details in MENU.get("🥬 Veg Mains", {}).items():
-            veg_items.append(f"• {item} — ₹{details['price']} {get_stars(details['rating'])}")
-        for item, details in MENU.get("🫓 Breads & Rice", {}).items():
-            veg_items.append(f"• {item} — ₹{details['price']}")
+    if any(x in t for x in ["track","my order","order status"]):
+        return f"📦 Share your *Order ID* or call us:\n📞 {r['phone']}\n🛵 Delivery: {r['delivery_mins']} mins"
 
-        text_reply = "🥬 *Vegetarian Options*\n\n"
-        for item in veg_items:
-            text_reply += item + "\n"
-        text_reply += "\n_All veg dishes prepared separately!_ 🙏"
-        return text_reply
+    # Order keywords — let GPT handle and trigger payment flow
+    order_kw = ["order","want","give me","send","1 ","2 ","3 ","biryani","chicken","mutton","pizza","burger"]
+    if any(x in t for x in order_kw):
+        plan = r.get("plan","starter")
+        if PLANS[plan]["ai_replies"] and OPENAI_KEY:
+            reply = ask_gpt(r, sender, text)
+            # Auto trigger coupon step if total detected in reply
+            if "₹" in reply and ("total" in reply.lower() or "subtotal" in reply.lower()):
+                subtotal = 0
+                for cat, items in r["menu"].items():
+                    for item, d in items.items():
+                        if item.lower() in t:
+                            subtotal += d["price"]
+                if subtotal >= r["min_order"]:
+                    active_orders[sender] = {"subtotal": subtotal, "step": "coupon"}
+                    return reply + "\n\n🎉 *Do you have a coupon code?*\nType code or *skip*\n_(Type *offers* to see deals)_"
+            return reply
+        else:
+            return f"""🛒 To place your order please call:\n📞 {r['phone']}\n\nOr type *menu* to see our full menu!\n\n_Upgrade to Pro plan for AI ordering 🤖_"""
 
-    # Track order
-    if any(x in text_lower for x in ["track", "my order", "order status", "where is"]):
-        return f"""📦 *Track Your Order*
+    # Pro plan — GPT for everything else
+    plan = r.get("plan","starter")
+    if PLANS[plan]["ai_replies"] and OPENAI_KEY:
+        return ask_gpt(r, sender, text)
 
-Share your *order number* or *phone number*.
+    return f"Type *menu* to see our menu or call {r['phone']} 📞"
 
-For urgent help:
-📞 Call: {RESTAURANT['phone']}
+# ════════════════════════════════════════════════════════════════════════════
+# ADMIN — SUBSCRIPTION MANAGEMENT API
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/admin/restaurants", methods=["GET"])
+def list_restaurants():
+    key = request.args.get("key","")
+    if key != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
+    summary = []
+    for sender, r in RESTAURANTS.items():
+        summary.append({
+            "id":       r["id"],
+            "name":     r["name"],
+            "plan":     r.get("plan"),
+            "status":   r.get("subscription"),
+            "expiry":   r.get("plan_expiry"),
+            "active":   is_subscription_active(r),
+            "sender":   sender,
+        })
+    return jsonify({"restaurants": summary, "total": len(summary)})
 
-Estimated delivery: {RESTAURANT['delivery_time']} 🛵"""
+@app.route("/admin/plans", methods=["GET"])
+def show_plans():
+    return jsonify(PLANS)
 
-    # Use GPT for everything else
-    return ask_gpt(sender, text)
+@app.route("/admin/stats", methods=["GET"])
+def stats():
+    key = request.args.get("key","")
+    if key != MASTER_KEY:
+        return jsonify({"error":"Unauthorized"}), 401
+    active    = sum(1 for r in RESTAURANTS.values() if is_subscription_active(r))
+    mrr_total = sum(PLANS[r.get("plan","starter")]["price"] for r in RESTAURANTS.values() if is_subscription_active(r))
+    return jsonify({
+        "total_restaurants": len(RESTAURANTS),
+        "active_subscriptions": active,
+        "monthly_revenue": f"₹{mrr_total:,}",
+        "annual_revenue": f"₹{mrr_total*12:,}",
+    })
 
-# ── Flask Routes ──────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# WHATSAPP WEBHOOK
+# ════════════════════════════════════════════════════════════════════════════
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
-    sender = request.form.get("From", "")
-    text = request.form.get("Body", "").strip()
-    print(f"\n{'='*50}")
-    print(f"From: {sender} | Message: {text}")
+    sender = request.form.get("From","")
+    text   = request.form.get("Body","").strip()
+    media  = int(request.form.get("NumMedia","0"))
+    print(f"From: {sender} | Msg: {text[:60]} | Media: {media}")
 
+    resp = MessagingResponse()
+
+    # Get restaurant
+    r = get_restaurant(sender)
+
+    # ── New restaurant not in system ──────────────────────────────────────
+    if not r:
+        resp.message(
+            "👋 Hello! This number is not registered with our system.\n\n"
+            "Are you a *restaurant owner* looking to set up WhatsApp ordering?\n\n"
+            "Contact NexoraAI:\n"
+            "📞 +91 7010624989\n"
+            "🌐 nexoraai.netlify.app\n\n"
+            "Plans start at ₹2,999/month! 🚀"
+        )
+        return str(resp)
+
+    # ── Subscription expired ──────────────────────────────────────────────
+    if not is_subscription_active(r):
+        resp.message(
+            f"⚠️ *{r['name']}* subscription has expired.\n\n"
+            f"Please renew to continue using the WhatsApp bot.\n\n"
+            f"Contact NexoraAI:\n"
+            f"📞 +91 7010624989\n"
+            f"🌐 nexoraai.netlify.app"
+        )
+        return str(resp)
+
+    # ── Payment screenshot received ───────────────────────────────────────
+    if media > 0 and sender in active_orders:
+        order = active_orders[sender]
+        oid   = order.get("oid", gen_order_id(r["id"]))
+        del active_orders[sender]
+        resp.message(
+            f"✅ *Payment Screenshot Received!*\n"
+            f"Order ID: *{oid}*\n"
+            f"Amount: ₹{order.get('total','')}\n\n"
+            f"🎉 Order confirmed! Preparing now...\n"
+            f"🛵 Delivery in {r['delivery_mins']} mins\n"
+            f"Enjoy your meal! 🍛❤️\n"
+            f"📞 {r['phone']}"
+        )
+        return str(resp)
+
+    # ── Normal message ────────────────────────────────────────────────────
     try:
-        reply = handle_message(sender, text)
+        reply = handle_message(r, sender, text)
     except Exception as e:
         print(f"Error: {e}")
-        reply = f"Sorry, please call {RESTAURANT['phone']} 🙏"
+        reply = f"Sorry, please call {r['phone']} 🙏"
 
-    print(f"Reply sent ({len(reply)} chars)")
-    resp = MessagingResponse()
     resp.message(reply)
     return str(resp)
 
+# ════════════════════════════════════════════════════════════════════════════
+# HOME
+# ════════════════════════════════════════════════════════════════════════════
 @app.route("/")
 def home():
-    return f"<h2>✅ {RESTAURANT['name']} WhatsApp Bot is Live!</h2>", 200
+    active = sum(1 for r in RESTAURANTS.values() if is_subscription_active(r))
+    mrr    = sum(PLANS[r.get("plan","starter")]["price"] for r in RESTAURANTS.values() if is_subscription_active(r))
+    return f"""
+    <h2>🤖 NexoraAI Restaurant WhatsApp Platform</h2>
+    <p>✅ Platform is Live!</p>
+    <hr>
+    <p>🍽️ Restaurants on platform: <b>{len(RESTAURANTS)}</b></p>
+    <p>✅ Active subscriptions: <b>{active}</b></p>
+    <p>💰 Monthly Revenue: <b>₹{mrr:,}</b></p>
+    <hr>
+    <p>📞 NexoraAI: +91 7010624989</p>
+    <p>🌐 nexoraai.netlify.app</p>
+    """, 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)
