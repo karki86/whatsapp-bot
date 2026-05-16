@@ -1,625 +1,697 @@
 """
-FoodieBot Chennai - Complete WhatsApp Food Discovery Platform
-By NexoraAI | +91 7010624989 | nexoraai.netlify.app
-Customer types Hi → finds nearby restaurants → orders → pays
-Ready to Deploy: GitHub → Render → Twilio → LIVE!
+FoodieBot Chennai — SuperBot v3.0
+NexoraAI | nexoraaiagen@gmail.com | +91 7010624989
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NEW in v3 (SuperBot):
+  ✅ WhatsApp Location Pin detection (lat/lng → Chennai zone)
+  ✅ Auto-detect area from any typed address / landmark
+  ✅ Nearby restaurants ranked by distance
+  ✅ Proactive AI: greets by time-of-day, suggests meals, upsells
+  ✅ Re-engagement nudges after 30 min inactivity
+  ✅ Smart suggestions if search returns 0 results
+  ✅ Full order flow preserved from v2
 """
 
+import os, json, math, time, uuid, random, datetime
+import requests
 from flask import Flask, request, jsonify
-from twilio.twiml.messaging_response import MessagingResponse
-import requests, os, random
-from datetime import datetime
 
 app = Flask(__name__)
 
-OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
-MASTER_KEY = os.environ.get("MASTER_KEY", "NEXORAAI2026")
+# ════════════════════════════════════════════════════════════════════════════
+#  ENV
+# ════════════════════════════════════════════════════════════════════════════
+TWILIO_SID      = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH     = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM     = os.environ.get("TWILIO_FROM", "whatsapp:+14155238886")  # sandbox
+OPENAI_KEY      = os.environ.get("OPENAI_API_KEY", "")
+ADMIN_KEY       = os.environ.get("ADMIN_KEY", "NEXORAAI2026")
 
-# ═══════════════════════════════════════════════════════════
-# PLATFORM PAYMENT — NexoraAI collects, pays restaurants daily
-# ═══════════════════════════════════════════════════════════
 PLATFORM = {
-    "name":     "FoodieBot Chennai",
-    "company":  "NexoraAI",
-    "upi":      os.environ.get("PLATFORM_UPI",     "nexoraai@upi"),
-    "gpay":     os.environ.get("PLATFORM_GPAY",    "nexoraai@okicici"),
-    "phonepe":  os.environ.get("PLATFORM_PHONEPE", "nexoraai@ybl"),
-    "card":     os.environ.get("PLATFORM_CARD",    "https://rzp.io/l/nexoraai"),
-    "phone":    "+91 7010624989",
-    "website":  "nexoraai.netlify.app",
+    "name":    "FoodieBot Chennai",
+    "upi":     "nexoraai@upi",
+    "phone":   "+91 7010624989",
+    "powered": "NexoraAI",
+    "commission": 0.10
 }
 
-COMMISSION = 0.10  # 10% per order
+# ════════════════════════════════════════════════════════════════════════════
+#  CHENNAI ZONE MAP
+#  Every major landmark / area mapped to (lat, lng, canonical_zone_name)
+# ════════════════════════════════════════════════════════════════════════════
+CHENNAI_ZONES = {
+    # North
+    "tiruvottiyur":      (13.1670, 80.3020, "Tiruvottiyur"),
+    "manali":            (13.1680, 80.2620, "Manali"),
+    "madhavaram":        (13.1490, 80.2290, "Madhavaram"),
+    "kolathur":          (13.1190, 80.2200, "Kolathur"),
+    "perambur":          (13.1140, 80.2460, "Perambur"),
+    "vyasarpadi":        (13.1060, 80.2490, "Vyasarpadi"),
+    "tondiarpet":        (13.1090, 80.2810, "Tondiarpet"),
+    "royapuram":         (13.1080, 80.2930, "Royapuram"),
+    "korukupet":         (13.1010, 80.2920, "Korukupet"),
+    # Central
+    "egmore":            (13.0790, 80.2610, "Egmore"),
+    "park town":         (13.0810, 80.2750, "Park Town"),
+    "central":           (13.0827, 80.2707, "Chennai Central"),
+    "chennai central":   (13.0827, 80.2707, "Chennai Central"),
+    "choolai":           (13.0920, 80.2580, "Choolai"),
+    "aminjikarai":       (13.0890, 80.2370, "Aminjikarai"),
+    "kilpauk":           (13.0890, 80.2420, "Kilpauk"),
+    "chetpet":           (13.0800, 80.2450, "Chetpet"),
+    "purasaiwakkam":     (13.0850, 80.2480, "Purasaiwakkam"),
+    "vepery":            (13.0860, 80.2620, "Vepery"),
+    "sowcarpet":         (13.0900, 80.2740, "Sowcarpet"),
+    "parrys":            (13.0920, 80.2820, "Parrys Corner"),
+    "george town":       (13.0940, 80.2880, "George Town"),
+    # South-Central
+    "t nagar":           (13.0418, 80.2341, "T Nagar"),
+    "tnagar":            (13.0418, 80.2341, "T Nagar"),
+    "pondy bazaar":      (13.0418, 80.2341, "T Nagar"),
+    "kodambakkam":       (13.0530, 80.2220, "Kodambakkam"),
+    "ashok nagar":       (13.0370, 80.2120, "Ashok Nagar"),
+    "vadapalani":        (13.0530, 80.2130, "Vadapalani"),
+    "koyambedu":         (13.0720, 80.1950, "Koyambedu"),
+    "arumbakkam":        (13.0720, 80.2130, "Arumbakkam"),
+    "virugambakkam":     (13.0550, 80.1940, "Virugambakkam"),
+    "valasaravakkam":    (13.0370, 80.1760, "Valasaravakkam"),
+    "saligramam":        (13.0470, 80.1870, "Saligramam"),
+    "anna nagar":        (13.0850, 80.2100, "Anna Nagar"),
+    "anna nagar east":   (13.0840, 80.2200, "Anna Nagar East"),
+    # South
+    "mylapore":          (13.0340, 80.2690, "Mylapore"),
+    "mandaveli":         (13.0270, 80.2650, "Mandaveli"),
+    "royapettah":        (13.0530, 80.2610, "Royapettah"),
+    "nungambakkam":      (13.0620, 80.2430, "Nungambakkam"),
+    "alwarpet":          (13.0380, 80.2540, "Alwarpet"),
+    "teynampet":         (13.0400, 80.2490, "Teynampet"),
+    "gopalapuram":       (13.0420, 80.2570, "Gopalapuram"),
+    "abhiramapuram":     (13.0400, 80.2620, "Abhiramapuram"),
+    "boat club":         (13.0290, 80.2550, "Boat Club"),
+    "adyar":             (13.0063, 80.2574, "Adyar"),
+    "kotturpuram":       (13.0150, 80.2470, "Kotturpuram"),
+    "thiruvanmiyur":     (12.9839, 80.2592, "Thiruvanmiyur"),
+    "besant nagar":      (13.0002, 80.2698, "Besant Nagar"),
+    "elliot's beach":    (13.0002, 80.2698, "Besant Nagar"),
+    "neelankarai":       (12.9520, 80.2527, "Neelankarai"),
+    "palavakkam":        (12.9450, 80.2500, "Palavakkam"),
+    "sholinganallur":    (12.9010, 80.2278, "Sholinganallur"),
+    "perungudi":         (12.9650, 80.2430, "Perungudi"),
+    "taramani":          (12.9850, 80.2400, "Taramani"),
+    "velachery":         (12.9788, 80.2204, "Velachery"),
+    "nanganallur":       (12.9950, 80.1970, "Nanganallur"),
+    "pallikaranai":      (12.9370, 80.2040, "Pallikaranai"),
+    "chromepet":         (12.9516, 80.1426, "Chromepet"),
+    "tambaram":          (12.9249, 80.1000, "Tambaram"),
+    # West & IT Corridor
+    "guindy":            (13.0067, 80.2206, "Guindy"),
+    "ekkatuthangal":     (13.0160, 80.2070, "Ekkatuthangal"),
+    "saidapet":          (13.0220, 80.2290, "Saidapet"),
+    "little mount":      (13.0200, 80.2230, "Little Mount"),
+    "maduravoyil":       (13.0590, 80.1780, "Maduravoyil"),
+    "porur":             (13.0370, 80.1570, "Porur"),
+    "poonamallee":       (13.0480, 80.0970, "Poonamallee"),
+    "ambattur":          (13.1140, 80.1620, "Ambattur"),
+    "avadi":             (13.1150, 80.0980, "Avadi"),
+    "mogappair":         (13.0930, 80.1680, "Mogappair"),
+    "padi":              (13.1080, 80.1990, "Padi"),
+    # OMR / IT
+    "omr":               (12.9010, 80.2278, "OMR"),
+    "perungalathur":     (12.8720, 80.0900, "Perungalathur"),
+    "siruseri":          (12.8560, 80.2180, "Siruseri"),
+    "navalur":           (12.8420, 80.2270, "Navalur"),
+    "kelambakkam":       (12.7870, 80.2100, "Kelambakkam"),
+    "mahindra city":     (12.7560, 80.0030, "Mahindra City"),
+}
 
-# ═══════════════════════════════════════════════════════════
-# ALL CHENNAI RESTAURANTS — VEG & NON-VEG
-# Add more by copying any block below
-# ═══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+#  RESTAURANTS — expanded to 8, each with real lat/lng
+# ════════════════════════════════════════════════════════════════════════════
 RESTAURANTS = {
-
-    # ── VEG RESTAURANTS ──────────────────────────────────
-
-    "R001": {
-        "id": "R001", "type": "veg",
-        "name": "Hotel Saravana Bhavan",
-        "emoji": "🍛", "cuisine": "South Indian Veg",
-        "area": "T Nagar", "city": "Chennai",
-        "address": "293, Usman Road, T Nagar, Chennai 600017",
-        "phone": "+91 44 2814 2060",
-        "timing": "6:00 AM – 11:00 PM",
-        "rating": 4.5, "reviews": "12,400",
-        "delivery_time": "30-45 mins",
-        "delivery_charge": 40, "min_order": 100,
-        "subscription": "active", "plan": "pro",
-        "tags": ["idly","dosa","pongal","vada","sambar","filter coffee","veg","south indian","breakfast","upma","meals","ghee rice","rasam","curd rice"],
+    "saravana": {
+        "name": "Hotel Saravana Bhavan", "emoji": "🥣",
+        "cuisine": "South Indian Veg", "type": "veg",
+        "area": "T Nagar", "lat": 13.0400, "lng": 80.2330,
+        "address": "No 77, Usman Rd, T Nagar, Chennai",
+        "phone": "+91 44 28340000", "rating": 4.6, "reviews": 2340,
+        "delivery_time": "25-35 min", "delivery_charge": 30, "min_order": 150,
+        "timing": "6 AM – 11 PM", "subscription": "active",
         "menu": {
-            "🌅 Breakfast (6AM-11AM)": {
-                "Idly (4pcs) + Sambar":   {"price":60,  "rating":4.8,"orders":8400, "spice":"Mild"},
-                "Masala Dosa":            {"price":80,  "rating":4.9,"orders":9200, "spice":"Mild"},
-                "Plain Dosa":             {"price":60,  "rating":4.7,"orders":7600, "spice":"None"},
-                "Pongal + Chutney":       {"price":70,  "rating":4.7,"orders":6800, "spice":"Mild"},
-                "Medu Vada (2pcs)":       {"price":50,  "rating":4.8,"orders":7800, "spice":"Mild"},
-                "Upma":                   {"price":50,  "rating":4.5,"orders":4200, "spice":"Mild"},
-                "Poori + Masala (3pcs)":  {"price":80,  "rating":4.6,"orders":5400, "spice":"Mild"},
-                "Rava Dosa":              {"price":90,  "rating":4.7,"orders":5600, "spice":"None"},
-                "Uthappam":               {"price":90,  "rating":4.6,"orders":4800, "spice":"Mild"},
+            "Breakfast": {
+                "Idly (2 pcs)":        {"price": 50,  "veg": True},
+                "Masala Dosa":         {"price": 90,  "veg": True},
+                "Pongal":              {"price": 70,  "veg": True},
+                "Rava Upma":           {"price": 60,  "veg": True},
+                "Mini Tiffin Combo":   {"price": 120, "veg": True},
             },
-            "🍛 Meals & Rice": {
-                "Full Meals (Veg)":       {"price":180, "rating":4.9,"orders":12000,"spice":"Mild"},
-                "Mini Meals":             {"price":140, "rating":4.7,"orders":8400, "spice":"Mild"},
-                "Curd Rice":              {"price":80,  "rating":4.6,"orders":5200, "spice":"None"},
-                "Lemon Rice":             {"price":90,  "rating":4.6,"orders":4800, "spice":"Mild"},
-                "Veg Biryani":            {"price":160, "rating":4.5,"orders":6400, "spice":"Medium"},
-                "Ghee Rice + Dal":        {"price":140, "rating":4.7,"orders":5600, "spice":"Mild"},
-                "Bisi Bele Bath":         {"price":120, "rating":4.6,"orders":4200, "spice":"Medium"},
+            "Meals": {
+                "Full Meals":          {"price": 180, "veg": True},
+                "Mini Meals":          {"price": 140, "veg": True},
+                "Curd Rice":           {"price": 80,  "veg": True},
+                "Sambar Rice":         {"price": 100, "veg": True},
             },
-            "🥘 Curries & Gravies": {
-                "Paneer Butter Masala":   {"price":180, "rating":4.7,"orders":7200, "spice":"Mild"},
-                "Dal Tadka":              {"price":120, "rating":4.6,"orders":5800, "spice":"Mild"},
-                "Palak Paneer":           {"price":180, "rating":4.6,"orders":5200, "spice":"Mild"},
-                "Sambar":                 {"price":60,  "rating":4.8,"orders":9600, "spice":"Medium"},
-            },
-            "🫓 Breads": {
-                "Chapati (2pcs)":         {"price":40,  "rating":4.5,"orders":6800, "spice":"None"},
-                "Parotta (2pcs)":         {"price":50,  "rating":4.8,"orders":9200, "spice":"None"},
-            },
-            "☕ Drinks & Sweets": {
-                "Filter Coffee":          {"price":40,  "rating":4.9,"orders":14000,"spice":"None"},
-                "Mango Lassi":            {"price":80,  "rating":4.7,"orders":4800, "spice":"None"},
-                "Gulab Jamun (2pcs)":     {"price":60,  "rating":4.7,"orders":8400, "spice":"None"},
-                "Halwa":                  {"price":80,  "rating":4.6,"orders":6200, "spice":"None"},
-            },
+            "Drinks": {
+                "Filter Coffee":       {"price": 40,  "veg": True},
+                "Buttermilk":          {"price": 30,  "veg": True},
+                "Fresh Lime Soda":     {"price": 50,  "veg": True},
+            }
         },
         "offers": {
-            "SARVANA10": {"discount":10,"type":"percent","desc":"10% off meals","min":150},
-            "THALI50":   {"discount":50,"type":"flat","desc":"₹50 off above ₹200","min":200},
-            "FREEDEL":   {"discount":40,"type":"delivery","desc":"Free delivery","min":200},
+            "SB10": {"type": "percent", "discount": 10, "min": 200, "desc": "10% off on ₹200+"},
+            "MORNING": {"type": "flat", "discount": 30, "min": 150, "desc": "₹30 off breakfast"},
         },
-        "reviews": [
-            {"name":"Vijay K","rating":5,"date":"Yesterday","text":"Best veg restaurant in Chennai! Filter coffee is divine ☕"},
-            {"name":"Priya M","rating":5,"date":"2 days ago","text":"Coming here since 1990. Quality never changes! 🍛"},
-        ],
+        "delivery_partners": [
+            {"name": "Rajan K",  "phone": "+91 9876500001", "rating": 4.8},
+            {"name": "Muthu S",  "phone": "+91 9876500002", "rating": 4.7},
+        ]
     },
-
-    "R002": {
-        "id": "R002", "type": "veg",
-        "name": "Murugan Idli Shop",
-        "emoji": "🥣", "cuisine": "South Indian Breakfast",
-        "area": "T Nagar", "city": "Chennai",
-        "address": "77, Usman Road, T Nagar, Chennai 600017",
-        "phone": "+91 44 2434 5678",
-        "timing": "5:30 AM – 11:30 PM",
-        "rating": 4.8, "reviews": "15,200",
-        "delivery_time": "20-35 mins",
-        "delivery_charge": 30, "min_order": 80,
-        "subscription": "active", "plan": "pro",
-        "tags": ["idly","dosa","vada","sambar","breakfast","pongal","soft idly","filter coffee","veg","south indian","tiffin","chutney"],
+    "anjappar": {
+        "name": "Anjappar Chettinad", "emoji": "🍗",
+        "cuisine": "Chettinad Non-Veg", "type": "nonveg",
+        "area": "Anna Nagar", "lat": 13.0840, "lng": 80.2100,
+        "address": "Shop 7, 2nd Ave, Anna Nagar, Chennai",
+        "phone": "+91 44 26261616", "rating": 4.5, "reviews": 1820,
+        "delivery_time": "35-50 min", "delivery_charge": 40, "min_order": 300,
+        "timing": "11 AM – 11 PM", "subscription": "active",
         "menu": {
-            "🥣 Idly Specials": {
-                "Soft Idly (4pcs)":       {"price":60,  "rating":4.9,"orders":18000,"spice":"Mild"},
-                "Ghee Idly (4pcs)":       {"price":80,  "rating":4.9,"orders":12000,"spice":"Mild"},
-                "Mini Idly (12pcs)":      {"price":100, "rating":4.8,"orders":9200, "spice":"Mild"},
-                "Kanchipuram Idly (2pcs)":{"price":70,  "rating":4.8,"orders":8400, "spice":"Medium"},
-                "Rava Idly (4pcs)":       {"price":80,  "rating":4.7,"orders":6800, "spice":"Mild"},
+            "Biryani": {
+                "Chicken Biryani":     {"price": 280, "veg": False},
+                "Mutton Biryani":      {"price": 380, "veg": False},
+                "Egg Biryani":         {"price": 220, "veg": False},
+                "Prawn Biryani":       {"price": 420, "veg": False},
             },
-            "🫓 Dosa": {
-                "Masala Dosa":            {"price":80,  "rating":4.9,"orders":16000,"spice":"Mild"},
-                "Paper Roast Dosa":       {"price":100, "rating":4.8,"orders":9800, "spice":"None"},
-                "Plain Dosa":             {"price":60,  "rating":4.8,"orders":14000,"spice":"None"},
-                "Onion Dosa":             {"price":80,  "rating":4.7,"orders":8400, "spice":"Mild"},
-                "Cheese Dosa":            {"price":120, "rating":4.7,"orders":6200, "spice":"None"},
-                "Set Dosa (3pcs)":        {"price":90,  "rating":4.7,"orders":7400, "spice":"None"},
+            "Gravy": {
+                "Chicken Chettinad":   {"price": 320, "veg": False},
+                "Mutton Pepper Fry":   {"price": 420, "veg": False},
+                "Fish Curry":          {"price": 300, "veg": False},
+                "Egg Curry":           {"price": 160, "veg": False},
             },
-            "🍲 Combos & Vada": {
-                "Medu Vada (2pcs)":       {"price":50,  "rating":4.8,"orders":12000,"spice":"Mild"},
-                "Sambar Vada":            {"price":70,  "rating":4.8,"orders":9600, "spice":"Medium"},
-                "Pongal + Vada Combo":    {"price":100, "rating":4.8,"orders":8400, "spice":"Mild"},
-                "Idly + Vada Combo":      {"price":100, "rating":4.9,"orders":10000,"spice":"Mild"},
-            },
-            "☕ Drinks": {
-                "Filter Coffee":          {"price":35,  "rating":4.9,"orders":18000,"spice":"None"},
-                "Tea":                    {"price":25,  "rating":4.7,"orders":12000,"spice":"None"},
-                "Buttermilk":             {"price":30,  "rating":4.7,"orders":8400, "spice":"None"},
-            },
+            "Starters": {
+                "Chicken 65":          {"price": 260, "veg": False},
+                "Mutton Sukka":        {"price": 360, "veg": False},
+                "Prawn Fry":           {"price": 340, "veg": False},
+            }
         },
         "offers": {
-            "IDLY10":  {"discount":10,"type":"percent","desc":"10% off breakfast combos","min":100},
-            "COMBO30": {"discount":30,"type":"flat","desc":"₹30 off above ₹150","min":150},
-            "FREEDEL": {"discount":30,"type":"delivery","desc":"Free delivery","min":150},
+            "CHETTINAD15": {"type": "percent", "discount": 15, "min": 500, "desc": "15% off ₹500+"},
+            "FREEDEL": {"type": "delivery", "discount": 40, "min": 400, "desc": "Free delivery on ₹400+"},
         },
-        "reviews": [
-            {"name":"Kavitha M","rating":5,"date":"Today","text":"Softest idly in all of Chennai! Sambar is divine ☕"},
-            {"name":"Rajan T","rating":5,"date":"Yesterday","text":"Paper roast dosa is crispy perfection! 🥣"},
-        ],
+        "delivery_partners": [
+            {"name": "Kumar R",   "phone": "+91 9876500003", "rating": 4.6},
+            {"name": "Pradeep M", "phone": "+91 9876500004", "rating": 4.9},
+        ]
     },
-
-    "R003": {
-        "id": "R003", "type": "veg",
-        "name": "Cream Centre",
-        "emoji": "🍕", "cuisine": "Multi-Cuisine Veg",
-        "area": "Nungambakkam", "city": "Chennai",
-        "address": "13, Khader Nawaz Khan Road, Nungambakkam, Chennai 600006",
-        "phone": "+91 44 2833 4477",
-        "timing": "11:30 AM – 11:00 PM",
-        "rating": 4.5, "reviews": "6,200",
-        "delivery_time": "30-45 mins",
-        "delivery_charge": 45, "min_order": 200,
-        "subscription": "active", "plan": "pro",
-        "tags": ["pizza","pasta","burger","veg","sandwich","milkshake","ice cream","waffle","dessert","mocktail","italian","mexican"],
+    "murugan": {
+        "name": "Murugan Idli Shop", "emoji": "🫕",
+        "cuisine": "Traditional Tiffin", "type": "veg",
+        "area": "Mylapore", "lat": 13.0340, "lng": 80.2690,
+        "address": "77, Luz Church Rd, Mylapore, Chennai",
+        "phone": "+91 44 28113455", "rating": 4.7, "reviews": 3100,
+        "delivery_time": "20-30 min", "delivery_charge": 25, "min_order": 100,
+        "timing": "6 AM – 10 PM", "subscription": "active",
         "menu": {
-            "🍕 Pizza": {
-                "Margherita Pizza":       {"price":320, "rating":4.7,"orders":3600, "spice":"Mild"},
-                "Paneer Tikka Pizza":     {"price":400, "rating":4.7,"orders":3200, "spice":"Medium"},
-                "Veggie Supreme Pizza":   {"price":380, "rating":4.6,"orders":2800, "spice":"Mild"},
-                "Corn & Capsicum Pizza":  {"price":340, "rating":4.5,"orders":2400, "spice":"Mild"},
+            "Signature": {
+                "Soft Idly (4 pcs)":   {"price": 80,  "veg": True},
+                "Ghee Idly (2 pcs)":   {"price": 90,  "veg": True},
+                "Sambar Vada":         {"price": 70,  "veg": True},
+                "Set Dosa":            {"price": 100, "veg": True},
+                "Podi Idly":           {"price": 90,  "veg": True},
             },
-            "🍝 Pasta & Mexican": {
-                "Penne Arrabbiata":       {"price":280, "rating":4.6,"orders":2800, "spice":"Hot"},
-                "Pasta Alfredo":          {"price":300, "rating":4.6,"orders":2400, "spice":"None"},
-                "Veg Burrito":            {"price":280, "rating":4.5,"orders":1800, "spice":"Medium"},
-                "Nachos + Dip":           {"price":240, "rating":4.6,"orders":2800, "spice":"Mild"},
-            },
-            "🍨 Desserts": {
-                "Chocolate Sundae":       {"price":200, "rating":4.8,"orders":4800, "spice":"None"},
-                "Hot Fudge Sundae":       {"price":220, "rating":4.8,"orders":4200, "spice":"None"},
-                "Waffle + Ice Cream":     {"price":280, "rating":4.7,"orders":3600, "spice":"None"},
-                "Brownie + Ice Cream":    {"price":260, "rating":4.8,"orders":4000, "spice":"None"},
-            },
-            "🥤 Drinks": {
-                "Milkshake":              {"price":160, "rating":4.7,"orders":4800, "spice":"None"},
-                "Fresh Juice":            {"price":120, "rating":4.6,"orders":3600, "spice":"None"},
-                "Mocktail":               {"price":180, "rating":4.6,"orders":2800, "spice":"None"},
+            "Combos": {
+                "Idly Vada Combo":     {"price": 130, "veg": True},
+                "Dosa Sambar Combo":   {"price": 140, "veg": True},
+                "Breakfast Thali":     {"price": 180, "veg": True},
             },
         },
         "offers": {
-            "CREAM20": {"discount":20,"type":"percent","desc":"20% off desserts","min":200},
-            "FLAT80":  {"discount":80,"type":"flat","desc":"₹80 off above ₹400","min":400},
-            "FREEDEL": {"discount":45,"type":"delivery","desc":"Free delivery","min":300},
+            "MURUGAN20": {"type": "flat", "discount": 20, "min": 150, "desc": "₹20 off on ₹150+"},
         },
-        "reviews": [
-            {"name":"Nithya R","rating":5,"date":"3 days ago","text":"Hot Fudge Sundae is incredible! Best desserts in Chennai 🍨"},
-        ],
+        "delivery_partners": [
+            {"name": "Selvam T",  "phone": "+91 9876500005", "rating": 4.7},
+        ]
     },
-
-    "R004": {
-        "id": "R004", "type": "veg",
-        "name": "Sangeetha Veg Restaurant",
-        "emoji": "🌿", "cuisine": "South Indian & North Indian Veg",
-        "area": "Anna Nagar", "city": "Chennai",
-        "address": "Shop 12, 2nd Avenue, Anna Nagar, Chennai 600040",
-        "phone": "+91 44 2626 1234",
-        "timing": "7:00 AM – 10:30 PM",
-        "rating": 4.4, "reviews": "5,800",
-        "delivery_time": "25-40 mins",
-        "delivery_charge": 35, "min_order": 100,
-        "subscription": "active", "plan": "starter",
-        "tags": ["idly","dosa","veg","meals","chapati","parotta","north indian","veg biryani","paneer","dal","south indian","breakfast"],
+    "buhari": {
+        "name": "Buhari Restaurant", "emoji": "🍖",
+        "cuisine": "Mughlai & Biryani", "type": "nonveg",
+        "area": "Egmore", "lat": 13.0790, "lng": 80.2610,
+        "address": "83, Anna Salai, Egmore, Chennai",
+        "phone": "+91 44 28521001", "rating": 4.4, "reviews": 2780,
+        "delivery_time": "40-55 min", "delivery_charge": 45, "min_order": 350,
+        "timing": "12 PM – 12 AM", "subscription": "active",
         "menu": {
-            "🌅 Breakfast": {
-                "Idly (4pcs)":            {"price":55,  "rating":4.6,"orders":5400, "spice":"Mild"},
-                "Dosa":                   {"price":70,  "rating":4.6,"orders":6200, "spice":"None"},
-                "Pongal":                 {"price":65,  "rating":4.5,"orders":4200, "spice":"Mild"},
-                "Vada (2pcs)":            {"price":50,  "rating":4.5,"orders":4800, "spice":"Mild"},
+            "Biryani": {
+                "Buhari Special Biryani":  {"price": 350, "veg": False},
+                "Mutton Dum Biryani":      {"price": 420, "veg": False},
+                "Chicken Dum Biryani":     {"price": 320, "veg": False},
+                "Veg Biryani":             {"price": 220, "veg": True},
             },
-            "🍛 Meals": {
-                "Veg Meals":              {"price":160, "rating":4.5,"orders":7200, "spice":"Mild"},
-                "Veg Biryani":            {"price":150, "rating":4.4,"orders":5600, "spice":"Medium"},
-                "Curd Rice":              {"price":75,  "rating":4.5,"orders":4200, "spice":"None"},
+            "Kebab & Tandoor": {
+                "Chicken Seekh Kebab":     {"price": 340, "veg": False},
+                "Mutton Shammi":           {"price": 380, "veg": False},
+                "Tandoori Chicken (half)": {"price": 360, "veg": False},
             },
-            "🥘 North Indian": {
-                "Paneer Butter Masala":   {"price":180, "rating":4.5,"orders":4800, "spice":"Mild"},
-                "Dal Makhani":            {"price":160, "rating":4.4,"orders":3600, "spice":"Mild"},
-                "Palak Paneer":           {"price":170, "rating":4.4,"orders":3200, "spice":"Mild"},
-                "Chana Masala":           {"price":150, "rating":4.3,"orders":2800, "spice":"Medium"},
-            },
-            "🫓 Breads": {
-                "Chapati (3pcs)":         {"price":45,  "rating":4.4,"orders":5600, "spice":"None"},
-                "Parotta (2pcs)":         {"price":50,  "rating":4.5,"orders":6200, "spice":"None"},
-                "Naan (2pcs)":            {"price":60,  "rating":4.4,"orders":3800, "spice":"None"},
-            },
-            "☕ Drinks": {
-                "Filter Coffee":          {"price":35,  "rating":4.7,"orders":8400, "spice":"None"},
-                "Lassi":                  {"price":70,  "rating":4.5,"orders":3200, "spice":"None"},
-            },
+            "Gravy": {
+                "Butter Chicken":          {"price": 320, "veg": False},
+                "Mutton Rogan Josh":       {"price": 400, "veg": False},
+                "Dal Makhani":             {"price": 200, "veg": True},
+            }
         },
         "offers": {
-            "SANG10":  {"discount":10,"type":"percent","desc":"10% off meals","min":120},
-            "FREEDEL": {"discount":35,"type":"delivery","desc":"Free delivery","min":180},
+            "BUHARI50": {"type": "flat", "discount": 50, "min": 500, "desc": "₹50 off on ₹500+"},
+            "NIGHTOWL": {"type": "percent", "discount": 20, "min": 400, "desc": "20% off after 9 PM"},
         },
-        "reviews": [
-            {"name":"Anand S","rating":4,"date":"4 days ago","text":"Good veg food, quick delivery. Value for money! 🌿"},
-        ],
+        "delivery_partners": [
+            {"name": "Arjun P",   "phone": "+91 9876500006", "rating": 4.5},
+            {"name": "Dinesh K",  "phone": "+91 9876500007", "rating": 4.6},
+        ]
     },
-
-    # ── NON-VEG RESTAURANTS ───────────────────────────────
-
-    "R005": {
-        "id": "R005", "type": "nonveg",
-        "name": "Anjappar Chettinad",
-        "emoji": "🌶️", "cuisine": "Chettinad Non-Veg",
-        "area": "Anna Nagar", "city": "Chennai",
-        "address": "100 Feet Road, Anna Nagar, Chennai 600040",
-        "phone": "+91 44 4211 7788",
-        "timing": "11:00 AM – 11:00 PM",
-        "rating": 4.7, "reviews": "8,600",
-        "delivery_time": "35-50 mins",
-        "delivery_charge": 45, "min_order": 200,
-        "subscription": "active", "plan": "pro",
-        "tags": ["chicken","mutton","biryani","chettinad","non veg","pepper chicken","fish","prawn","crab","egg","spicy","kuzhi paniyaram"],
+    "cream_centre": {
+        "name": "Cream Centre", "emoji": "🍕",
+        "cuisine": "Multi-Cuisine Veg", "type": "veg",
+        "area": "Nungambakkam", "lat": 13.0620, "lng": 80.2430,
+        "address": "7, Khader Nawaz Khan Rd, Nungambakkam",
+        "phone": "+91 44 28331234", "rating": 4.3, "reviews": 1560,
+        "delivery_time": "30-45 min", "delivery_charge": 35, "min_order": 250,
+        "timing": "12 PM – 11 PM", "subscription": "active",
         "menu": {
-            "🍗 Biryani": {
-                "Chicken Biryani":        {"price":320, "rating":4.9,"orders":6800, "spice":"Medium"},
-                "Mutton Biryani":         {"price":380, "rating":4.8,"orders":4200, "spice":"Medium"},
-                "Prawn Biryani":          {"price":420, "rating":4.7,"orders":2800, "spice":"Medium"},
-                "Chettinad Biryani":      {"price":350, "rating":4.9,"orders":5200, "spice":"Hot"},
-                "Egg Biryani":            {"price":240, "rating":4.6,"orders":3600, "spice":"Medium"},
+            "Starters": {
+                "Veg Spring Rolls":     {"price": 180, "veg": True},
+                "Paneer Tikka":         {"price": 260, "veg": True},
+                "Cheese Balls":         {"price": 200, "veg": True},
             },
-            "🥩 Chettinad Specials": {
-                "Chettinad Pepper Chicken":{"price":380,"rating":4.9,"orders":5600,"spice":"Hot"},
-                "Mutton Chukka":           {"price":420,"rating":4.9,"orders":4400,"spice":"Hot"},
-                "Country Chicken Gravy":   {"price":480,"rating":4.8,"orders":3800,"spice":"Hot"},
-                "Kuzhi Paniyaram":         {"price":160,"rating":4.7,"orders":3200,"spice":"Medium"},
+            "Mains": {
+                "Paneer Butter Masala": {"price": 280, "veg": True},
+                "Pasta Arrabiata":      {"price": 240, "veg": True},
+                "Veg Lasagne":          {"price": 320, "veg": True},
+                "Mexican Rice Bowl":    {"price": 260, "veg": True},
             },
-            "🐟 Seafood": {
-                "Fish Curry":             {"price":320, "rating":4.7,"orders":3600, "spice":"Hot"},
-                "Prawn Masala":           {"price":420, "rating":4.8,"orders":2800, "spice":"Hot"},
-                "Fish Fry":               {"price":280, "rating":4.8,"orders":4200, "spice":"Medium"},
-                "Crab Masala":            {"price":580, "rating":4.7,"orders":1800, "spice":"Hot"},
+            "Pizza": {
+                "Margherita Pizza":     {"price": 260, "veg": True},
+                "Veggie Supreme Pizza": {"price": 320, "veg": True},
             },
-            "🫓 Breads": {
-                "Parotta (2pcs)":         {"price":60,  "rating":4.7,"orders":6400, "spice":"None"},
-                "Idiyappam + Curry":      {"price":140, "rating":4.8,"orders":3600, "spice":"Medium"},
-                "Roti (2pcs)":            {"price":50,  "rating":4.5,"orders":4200, "spice":"None"},
-            },
+            "Desserts": {
+                "Hot Chocolate Fudge":  {"price": 220, "veg": True},
+                "Brownie Sundae":       {"price": 200, "veg": True},
+            }
         },
         "offers": {
-            "ANJA15":  {"discount":15,"type":"percent","desc":"15% off Chettinad specials","min":300},
-            "FLAT100": {"discount":100,"type":"flat","desc":"₹100 off above ₹500","min":500},
-            "FREEDEL": {"discount":45,"type":"delivery","desc":"Free delivery","min":300},
+            "PIZZA20": {"type": "percent", "discount": 20, "min": 300, "desc": "20% off on pizza"},
         },
-        "reviews": [
-            {"name":"Senthil K","rating":5,"date":"2 days ago","text":"Best Chettinad food! Pepper chicken is outstanding! 🌶️"},
-            {"name":"Anand P","rating":5,"date":"3 days ago","text":"Country chicken gravy is legendary! Worth every rupee 🍗"},
-        ],
+        "delivery_partners": [
+            {"name": "Vinoth S",  "phone": "+91 9876500008", "rating": 4.8},
+        ]
     },
-
-    "R006": {
-        "id": "R006", "type": "nonveg",
-        "name": "Buhari Restaurant",
-        "emoji": "🍖", "cuisine": "Mughlai & South Indian",
-        "area": "Anna Salai", "city": "Chennai",
-        "address": "83, Anna Salai, Mount Road, Chennai 600002",
-        "phone": "+91 44 2852 1144",
-        "timing": "12:00 PM – 11:30 PM",
-        "rating": 4.6, "reviews": "9,800",
-        "delivery_time": "40-55 mins",
-        "delivery_charge": 50, "min_order": 250,
-        "subscription": "active", "plan": "pro",
-        "tags": ["biryani","chicken","mutton","kebab","mughlai","naan","butter chicken","fish","prawn","non veg","tandoori"],
+    "kaaraikudi": {
+        "name": "Kaaraikudi Chettinad", "emoji": "🍛",
+        "cuisine": "Authentic Chettinad", "type": "nonveg",
+        "area": "Velachery", "lat": 12.9788, "lng": 80.2204,
+        "address": "45, 100 Ft Rd, Velachery, Chennai",
+        "phone": "+91 98412 00000", "rating": 4.6, "reviews": 980,
+        "delivery_time": "30-45 min", "delivery_charge": 35, "min_order": 250,
+        "timing": "11 AM – 10:30 PM", "subscription": "active",
         "menu": {
-            "🍗 Biryani (Since 1951)": {
-                "Special Chicken Biryani":{"price":380, "rating":4.9,"orders":8400, "spice":"Medium"},
-                "Mutton Biryani":         {"price":440, "rating":4.8,"orders":5600, "spice":"Medium"},
-                "Prawn Biryani":          {"price":480, "rating":4.8,"orders":3200, "spice":"Medium"},
-                "Veg Biryani":            {"price":240, "rating":4.5,"orders":2800, "spice":"Mild"},
+            "Biryani": {
+                "Kaaraikudi Mutton Biryani": {"price": 400, "veg": False},
+                "Chicken Biryani":           {"price": 280, "veg": False},
             },
-            "🥩 Mughlai": {
-                "Butter Chicken":         {"price":360, "rating":4.9,"orders":5600, "spice":"Mild"},
-                "Chicken Tikka":          {"price":380, "rating":4.8,"orders":4800, "spice":"Medium"},
-                "Mutton Seekh Kebab":     {"price":420, "rating":4.8,"orders":3600, "spice":"Medium"},
-                "Mutton Rogan Josh":      {"price":440, "rating":4.8,"orders":3200, "spice":"Hot"},
-                "Chicken Korma":          {"price":340, "rating":4.7,"orders":3800, "spice":"Mild"},
-            },
-            "🐟 Seafood": {
-                "Fish Masala":            {"price":360, "rating":4.7,"orders":3200, "spice":"Hot"},
-                "Prawn Masala":           {"price":460, "rating":4.7,"orders":2400, "spice":"Hot"},
-            },
-            "🫓 Breads": {
-                "Butter Naan (2pcs)":     {"price":80,  "rating":4.7,"orders":5600, "spice":"None"},
-                "Garlic Naan (2pcs)":     {"price":100, "rating":4.8,"orders":4800, "spice":"None"},
-                "Tandoori Roti (2pcs)":   {"price":70,  "rating":4.6,"orders":4200, "spice":"None"},
-            },
-            "🍦 Desserts": {
-                "Gulab Jamun (4pcs)":     {"price":100, "rating":4.7,"orders":3600, "spice":"None"},
-                "Kheer":                  {"price":120, "rating":4.6,"orders":2400, "spice":"None"},
-                "Phirni":                 {"price":100, "rating":4.7,"orders":2800, "spice":"None"},
+            "Chettinad Specials": {
+                "Chettinad Fish Fry":        {"price": 320, "veg": False},
+                "Chicken Kuzhambu":          {"price": 300, "veg": False},
+                "Quail (Kaadai) Fry":        {"price": 380, "veg": False},
+                "Kavuni Arisi (Dessert)":    {"price": 120, "veg": True},
             },
         },
         "offers": {
-            "BUHARI15": {"discount":15,"type":"percent","desc":"15% off first order","min":300},
-            "FLAT120":  {"discount":120,"type":"flat","desc":"₹120 off above ₹600","min":600},
-            "FREEDEL":  {"discount":50,"type":"delivery","desc":"Free delivery","min":400},
+            "KAAR10": {"type": "percent", "discount": 10, "min": 300, "desc": "10% off ₹300+"},
         },
-        "reviews": [
-            {"name":"Ashwin R","rating":5,"date":"2 days ago","text":"Buhari biryani — legendary since 1951! 🍖"},
-            {"name":"Deepa S","rating":5,"date":"4 days ago","text":"Butter chicken is divine. Naan perfectly soft! 👌"},
-        ],
+        "delivery_partners": [
+            {"name": "Balu K",  "phone": "+91 9876500009", "rating": 4.7},
+        ]
     },
-
-    "R007": {
-        "id": "R007", "type": "nonveg",
-        "name": "Ponnusamy Hotel",
-        "emoji": "🍗", "cuisine": "Tamil Non-Veg",
-        "area": "Vadapalani", "city": "Chennai",
-        "address": "31, Arcot Road, Vadapalani, Chennai 600026",
-        "phone": "+91 44 2374 5678",
-        "timing": "11:00 AM – 11:00 PM",
-        "rating": 4.6, "reviews": "7,400",
-        "delivery_time": "30-45 mins",
-        "delivery_charge": 40, "min_order": 180,
-        "subscription": "active", "plan": "pro",
-        "tags": ["chicken","mutton","biryani","fish","non veg","tamil","pepper chicken","country chicken","egg","prawn","kothu parotta"],
+    "bombay_bakery": {
+        "name": "Bombay Bakery & Café", "emoji": "🥐",
+        "cuisine": "Bakery, Snacks & Chai", "type": "veg",
+        "area": "Adyar", "lat": 13.0063, "lng": 80.2574,
+        "address": "12, LB Rd, Adyar, Chennai",
+        "phone": "+91 98400 11111", "rating": 4.5, "reviews": 710,
+        "delivery_time": "15-25 min", "delivery_charge": 20, "min_order": 80,
+        "timing": "7 AM – 10 PM", "subscription": "active",
         "menu": {
-            "🍗 Biryani": {
-                "Chicken Biryani":        {"price":280, "rating":4.8,"orders":7200, "spice":"Medium"},
-                "Mutton Biryani":         {"price":340, "rating":4.7,"orders":4400, "spice":"Medium"},
-                "Egg Biryani":            {"price":220, "rating":4.6,"orders":3800, "spice":"Medium"},
-                "Fish Biryani":           {"price":320, "rating":4.7,"orders":2800, "spice":"Medium"},
+            "Bakery": {
+                "Veg Puff":            {"price": 35,  "veg": True},
+                "Egg Puff":            {"price": 40,  "veg": False},
+                "Croissant":           {"price": 60,  "veg": True},
+                "Samosa (2 pcs)":      {"price": 50,  "veg": True},
+                "Bread Toast":         {"price": 45,  "veg": True},
             },
-            "🥩 Specials": {
-                "Pepper Chicken":         {"price":300, "rating":4.8,"orders":4800, "spice":"Hot"},
-                "Country Chicken Fry":    {"price":380, "rating":4.8,"orders":3600, "spice":"Hot"},
-                "Chicken 65":             {"price":260, "rating":4.8,"orders":5400, "spice":"Hot"},
-                "Mutton Liver Fry":       {"price":320, "rating":4.7,"orders":2400, "spice":"Hot"},
-                "Egg Curry":              {"price":160, "rating":4.5,"orders":3200, "spice":"Medium"},
+            "Café Drinks": {
+                "Masala Chai":         {"price": 40,  "veg": True},
+                "Cold Coffee":         {"price": 80,  "veg": True},
+                "Lemon Iced Tea":      {"price": 70,  "veg": True},
             },
-            "🐟 Seafood": {
-                "Fish Fry":               {"price":260, "rating":4.7,"orders":4200, "spice":"Medium"},
-                "Prawn Fry":              {"price":380, "rating":4.7,"orders":2400, "spice":"Medium"},
-                "Fish Curry":             {"price":280, "rating":4.6,"orders":3200, "spice":"Hot"},
-            },
-            "🫓 Breads & Rice": {
-                "Kothu Parotta (Chicken)":{"price":160, "rating":4.8,"orders":5600, "spice":"Hot"},
-                "Parotta (2pcs)":         {"price":50,  "rating":4.7,"orders":7200, "spice":"None"},
-                "Steamed Rice":           {"price":50,  "rating":4.5,"orders":4800, "spice":"None"},
-            },
+            "Sweets": {
+                "Gulab Jamun (2 pcs)": {"price": 60,  "veg": True},
+                "Carrot Halwa":        {"price": 80,  "veg": True},
+                "Payasam Cup":         {"price": 70,  "veg": True},
+            }
         },
         "offers": {
-            "PONNU10": {"discount":10,"type":"percent","desc":"10% off all orders","min":200},
-            "FLAT60":  {"discount":60,"type":"flat","desc":"₹60 off above ₹350","min":350},
-            "FREEDEL": {"discount":40,"type":"delivery","desc":"Free delivery","min":250},
+            "CHAI5": {"type": "flat", "discount": 20, "min": 100, "desc": "₹20 off on ₹100+"},
         },
-        "reviews": [
-            {"name":"Murugan K","rating":5,"date":"1 day ago","text":"Best pepper chicken in Chennai! Kothu parotta is fire 🍗"},
-            {"name":"Ramesh P","rating":5,"date":"3 days ago","text":"Authentic Tamil non-veg. Never disappoints! 💯"},
-        ],
+        "delivery_partners": [
+            {"name": "Suresh A", "phone": "+91 9876500010", "rating": 4.9},
+        ]
     },
-
-    "R008": {
-        "id": "R008", "type": "nonveg",
-        "name": "Hakeem's Biryani",
-        "emoji": "🍛", "cuisine": "Biryani Specialist",
-        "area": "Perambur", "city": "Chennai",
-        "address": "45, Perambur High Road, Chennai 600011",
-        "phone": "+91 98840 56789",
-        "timing": "11:30 AM – 11:00 PM",
-        "rating": 4.7, "reviews": "5,400",
-        "delivery_time": "30-45 mins",
-        "delivery_charge": 35, "min_order": 200,
-        "subscription": "active", "plan": "pro",
-        "tags": ["biryani","chicken","mutton","prawn","egg","non veg","dum biryani","family pack","salna"],
+    "seafood_bay": {
+        "name": "Chennai Seafood Bay", "emoji": "🦐",
+        "cuisine": "Coastal Seafood", "type": "nonveg",
+        "area": "Besant Nagar", "lat": 13.0002, "lng": 80.2698,
+        "address": "18, 4th Ave, Besant Nagar, Chennai",
+        "phone": "+91 98765 22222", "rating": 4.7, "reviews": 1240,
+        "delivery_time": "35-50 min", "delivery_charge": 50, "min_order": 400,
+        "timing": "12 PM – 11 PM", "subscription": "active",
         "menu": {
-            "🍛 Biryani — Our Specialty": {
-                "Chicken Biryani (1 person)": {"price":280,"rating":4.9,"orders":9600,"spice":"Medium"},
-                "Mutton Biryani (1 person)":  {"price":360,"rating":4.9,"orders":5600,"spice":"Medium"},
-                "Prawn Biryani (1 person)":   {"price":400,"rating":4.8,"orders":2800,"spice":"Medium"},
-                "Egg Biryani (1 person)":     {"price":220,"rating":4.7,"orders":4400,"spice":"Medium"},
-                "Chicken Biryani (Family)":   {"price":900,"rating":4.9,"orders":2400,"spice":"Medium"},
-                "Mutton Biryani (Family)":    {"price":1100,"rating":4.9,"orders":1600,"spice":"Medium"},
+            "Seafood Starters": {
+                "Prawn Masala Fry":         {"price": 380, "veg": False},
+                "Fish Fingers":             {"price": 280, "veg": False},
+                "Squid Pepper Fry":         {"price": 360, "veg": False},
+                "Crab Masala (500g)":       {"price": 680, "veg": False},
             },
-            "🥘 Sides & Gravy": {
-                "Chicken Salna":          {"price":120, "rating":4.8,"orders":4800, "spice":"Hot"},
-                "Mutton Salna":           {"price":160, "rating":4.8,"orders":2800, "spice":"Hot"},
-                "Raita":                  {"price":60,  "rating":4.6,"orders":6400, "spice":"None"},
-                "Boiled Egg":             {"price":30,  "rating":4.5,"orders":5600, "spice":"None"},
-            },
-            "🥤 Drinks": {
-                "Mango Lassi":            {"price":80,  "rating":4.7,"orders":3200, "spice":"None"},
-                "Buttermilk":             {"price":40,  "rating":4.6,"orders":4800, "spice":"None"},
-                "Mineral Water":          {"price":20,  "rating":4.0,"orders":8400, "spice":"None"},
+            "Mains & Curry": {
+                "Prawn Biryani":            {"price": 440, "veg": False},
+                "Fish Curry with Rice":     {"price": 320, "veg": False},
+                "Lobster Butter Garlic":    {"price": 980, "veg": False},
+                "Mixed Seafood Rice Bowl":  {"price": 420, "veg": False},
             },
         },
         "offers": {
-            "BIRYANI10": {"discount":10,"type":"percent","desc":"10% off all biryani","min":250},
-            "FAMILY20":  {"discount":20,"type":"percent","desc":"20% off family packs","min":800},
-            "FREEDEL":   {"discount":35,"type":"delivery","desc":"Free delivery","min":300},
+            "SEAFRESH": {"type": "percent", "discount": 12, "min": 500, "desc": "12% off ₹500+"},
+            "FREESHIP": {"type": "delivery", "discount": 50, "min": 600, "desc": "Free delivery ₹600+"},
         },
-        "reviews": [
-            {"name":"Farhan A","rating":5,"date":"Yesterday","text":"Best dum biryani in North Chennai! Family pack is great value 🍛"},
-            {"name":"Priyanka R","rating":5,"date":"3 days ago","text":"Mutton biryani is outstanding! Tender meat, perfect spice! ❤️"},
-        ],
-    },
-
-    "R009": {
-        "id": "R009", "type": "both",
-        "name": "Barbeque Nation",
-        "emoji": "🔥", "cuisine": "Grills & BBQ",
-        "area": "Phoenix Mall, Velachery", "city": "Chennai",
-        "address": "Phoenix MarketCity, Velachery Main Road, Chennai 600042",
-        "phone": "+91 44 4055 5555",
-        "timing": "12:00 PM – 11:00 PM",
-        "rating": 4.5, "reviews": "11,200",
-        "delivery_time": "45-60 mins",
-        "delivery_charge": 60, "min_order": 400,
-        "subscription": "active", "plan": "enterprise",
-        "tags": ["barbeque","bbq","grill","chicken","mutton","veg","non veg","seekh kebab","tikka","prawns","peri peri","buffet"],
-        "menu": {
-            "🔥 BBQ & Grills": {
-                "Chicken Tikka (6pcs)":   {"price":380, "rating":4.8,"orders":4800, "spice":"Medium"},
-                "Mutton Seekh Kebab (4pcs)":{"price":420,"rating":4.8,"orders":3200,"spice":"Medium"},
-                "Peri Peri Chicken (6pcs)":{"price":360,"rating":4.7,"orders":3600,"spice":"Hot"},
-                "Paneer Tikka (6pcs)":    {"price":320, "rating":4.6,"orders":2800, "spice":"Medium"},
-                "Prawn Grill (6pcs)":     {"price":460, "rating":4.7,"orders":2000, "spice":"Medium"},
-            },
-            "🍛 Mains": {
-                "Chicken Biryani":        {"price":380, "rating":4.7,"orders":3600, "spice":"Medium"},
-                "Butter Chicken":         {"price":360, "rating":4.8,"orders":3200, "spice":"Mild"},
-                "Dal Makhani":            {"price":280, "rating":4.6,"orders":2400, "spice":"Mild"},
-                "Paneer Makhani":         {"price":320, "rating":4.6,"orders":2200, "spice":"Mild"},
-            },
-            "🫓 Breads": {
-                "Garlic Naan (2pcs)":     {"price":100, "rating":4.7,"orders":4800, "spice":"None"},
-                "Butter Naan (2pcs)":     {"price":90,  "rating":4.6,"orders":4400, "spice":"None"},
-            },
-            "🍦 Desserts": {
-                "Gulab Jamun (4pcs)":     {"price":160, "rating":4.7,"orders":3200, "spice":"None"},
-                "Ice Cream":              {"price":140, "rating":4.6,"orders":2800, "spice":"None"},
-                "Rasmalai":               {"price":180, "rating":4.7,"orders":2400, "spice":"None"},
-            },
-        },
-        "offers": {
-            "BBQ15":   {"discount":15,"type":"percent","desc":"15% off grills","min":400},
-            "FLAT150": {"discount":150,"type":"flat","desc":"₹150 off above ₹800","min":800},
-            "FREEDEL": {"discount":60,"type":"delivery","desc":"Free delivery","min":600},
-        },
-        "reviews": [
-            {"name":"Vivek S","rating":5,"date":"2 days ago","text":"Amazing BBQ! Peri peri chicken is addictive 🔥"},
-        ],
-    },
-
-    "R010": {
-        "id": "R010", "type": "nonveg",
-        "name": "Junior Kuppanna",
-        "emoji": "🌺", "cuisine": "Kongu Non-Veg",
-        "area": "Mogappair", "city": "Chennai",
-        "address": "12, 4th Street, Mogappair West, Chennai 600037",
-        "phone": "+91 98420 12345",
-        "timing": "11:00 AM – 10:30 PM",
-        "rating": 4.6, "reviews": "6,800",
-        "delivery_time": "35-50 mins",
-        "delivery_charge": 45, "min_order": 200,
-        "subscription": "active", "plan": "pro",
-        "tags": ["chicken","mutton","biryani","non veg","kongu","tamil","pepper chicken","country chicken","fish","veg thali"],
-        "menu": {
-            "🍗 Biryani": {
-                "Chicken Biryani":        {"price":300, "rating":4.8,"orders":5600, "spice":"Medium"},
-                "Mutton Biryani":         {"price":360, "rating":4.7,"orders":3200, "spice":"Medium"},
-                "Chicken Kuzhambu Sadam":{"price":280, "rating":4.7,"orders":3600, "spice":"Hot"},
-            },
-            "🥩 Kongu Specials": {
-                "Pepper Chicken":         {"price":340, "rating":4.8,"orders":4400, "spice":"Hot"},
-                "Country Chicken Curry":  {"price":420, "rating":4.9,"orders":3800, "spice":"Hot"},
-                "Mutton Kuzhambu":        {"price":400, "rating":4.8,"orders":2800, "spice":"Hot"},
-                "Chicken Varuval":        {"price":320, "rating":4.7,"orders":3600, "spice":"Hot"},
-                "Egg Masala":             {"price":180, "rating":4.5,"orders":2800, "spice":"Medium"},
-            },
-            "🐟 Seafood": {
-                "Fish Kuzhambu":          {"price":300, "rating":4.7,"orders":2800, "spice":"Hot"},
-                "Prawn Masala":           {"price":400, "rating":4.7,"orders":2000, "spice":"Hot"},
-                "Nethili Fish Fry":       {"price":260, "rating":4.8,"orders":2400, "spice":"Medium"},
-            },
-            "🫓 Breads & Rice": {
-                "Parotta (2pcs)":         {"price":50,  "rating":4.7,"orders":5600, "spice":"None"},
-                "Idiyappam + Curry":      {"price":130, "rating":4.7,"orders":3200, "spice":"Medium"},
-                "Steamed Rice":           {"price":50,  "rating":4.5,"orders":4200, "spice":"None"},
-            },
-        },
-        "offers": {
-            "KUPPANNA10":{"discount":10,"type":"percent","desc":"10% off all orders","min":220},
-            "FLAT80":    {"discount":80,"type":"flat","desc":"₹80 off above ₹400","min":400},
-            "FREEDEL":   {"discount":45,"type":"delivery","desc":"Free delivery","min":300},
-        },
-        "reviews": [
-            {"name":"Kathir R","rating":5,"date":"1 day ago","text":"Country chicken curry is absolutely divine! Authentic Kongu taste 🌺"},
-        ],
+        "delivery_partners": [
+            {"name": "Fisher K",  "phone": "+91 9876500011", "rating": 4.6},
+            {"name": "Mohan G",   "phone": "+91 9876500012", "rating": 4.8},
+        ]
     },
 }
 
-# ═══════════════════════════════════════════════════════════
-# DELIVERY PARTNERS BY AREA
-# ═══════════════════════════════════════════════════════════
-DELIVERY_PARTNERS = {
-    "t nagar":      {"name":"Ramu",   "phone":"+91 98001 11001","rating":4.8},
-    "anna nagar":   {"name":"Suresh", "phone":"+91 98001 11002","rating":4.9},
-    "velachery":    {"name":"Balu",   "phone":"+91 98001 11003","rating":4.7},
-    "anna salai":   {"name":"Kannan", "phone":"+91 98001 11004","rating":4.8},
-    "nungambakkam": {"name":"Mani",   "phone":"+91 98001 11005","rating":4.9},
-    "vadapalani":   {"name":"Karthik","phone":"+91 98001 11006","rating":4.7},
-    "perambur":     {"name":"Raja",   "phone":"+91 98001 11007","rating":4.8},
-    "mogappair":    {"name":"Siva",   "phone":"+91 98001 11008","rating":4.8},
+# ════════════════════════════════════════════════════════════════════════════
+#  IN-MEMORY STATE
+# ════════════════════════════════════════════════════════════════════════════
+sessions   = {}   # sender → conversation messages for GPT
+user_state = {}   # sender → {"step", "cart", "restaurant", "name", "address",
+                  #           "coupon_discount", "location_lat", "location_lng",
+                  #           "zone", "last_active"}
+orders     = {}
+payouts    = {}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  GEO UTILITIES
+# ════════════════════════════════════════════════════════════════════════════
+def haversine(lat1, lng1, lat2, lng2):
+    """Distance in km between two lat/lng points."""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+def latlong_to_zone(lat, lng):
+    """Return the nearest Chennai zone name for given coordinates."""
+    best, best_dist = None, 9999
+    for key, (zlat, zlng, zname) in CHENNAI_ZONES.items():
+        d = haversine(lat, lng, zlat, zlng)
+        if d < best_dist:
+            best_dist, best = d, zname
+    return best if best else "Chennai"
+
+def text_to_zone(text):
+    """Match typed area/landmark text to a zone. Returns (zone_name, lat, lng) or None."""
+    t = text.lower().strip()
+    for key, (zlat, zlng, zname) in CHENNAI_ZONES.items():
+        if key in t or t in key:
+            return zname, zlat, zlng
+    return None
+
+def restaurants_near(lat, lng, limit=5):
+    """Return restaurants sorted by distance from given point."""
+    active = [(rid, r) for rid, r in RESTAURANTS.items() if r.get("subscription") == "active"]
+    with_dist = []
+    for rid, r in active:
+        d = haversine(lat, lng, r["lat"], r["lng"])
+        with_dist.append((d, rid, r))
+    with_dist.sort(key=lambda x: x[0])
+    return [(dist, rid, r) for dist, rid, r in with_dist[:limit]]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  TIME-AWARE PROACTIVE SUGGESTIONS
+# ════════════════════════════════════════════════════════════════════════════
+def time_greeting():
+    hour = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).hour
+    if 5 <= hour < 12:
+        return "Good morning! ☀️", "breakfast", ["idly", "dosa", "pongal", "chai", "coffee"]
+    elif 12 <= hour < 15:
+        return "Good afternoon! 🌤️", "lunch", ["biryani", "meals", "rice", "chicken", "fish"]
+    elif 15 <= hour < 18:
+        return "Good evening! ☕", "snacks", ["puff", "chai", "samosa", "coffee", "sweets"]
+    elif 18 <= hour < 22:
+        return "Good evening! 🌆", "dinner", ["biryani", "chicken", "mutton", "seafood", "pizza"]
+    else:
+        return "Hey night owl! 🌙", "late night", ["biryani", "chicken", "pizza", "kebab"]
+
+def proactive_nudge(suggestion_type, foods, zone=None):
+    greeting, meal, _ = time_greeting()
+    area_hint = f" near *{zone}*" if zone else " near you"
+    suggestions = ", ".join([f"_{f}_" for f in foods[:4]])
+    return (
+        f"{greeting} Craving something for *{meal}*?\n\n"
+        f"🔥 Popular right now{area_hint}:\n{suggestions}\n\n"
+        f"📍 *Share your location* (📎 → Location) for restaurants nearest to you!\n"
+        f"_Or just type any food name — I'll find it!_ 🔍"
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  SEARCH ENGINE
+# ════════════════════════════════════════════════════════════════════════════
+FOOD_ALIASES = {
+    "biriyani": "biryani", "briyani": "biryani",
+    "dosai": "dosa", "thosai": "dosa",
+    "idli": "idly", "idlies": "idly",
+    "noodle": "noodles", "pasta": "pasta",
+    "prawns": "prawn", "shrimp": "prawn",
+    "crab": "crab", "fish": "fish",
+    "chicken 65": "chicken 65", "c65": "chicken 65",
 }
 
-# ═══════════════════════════════════════════════════════════
-# STORAGE
-# ═══════════════════════════════════════════════════════════
-sessions        = {}
-active_orders   = {}
-pending_reviews = {}
-payout_ledger   = {}
-order_history   = []
-
-# ═══════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════
-def stars(r): return "⭐" * int(r)
-def oid(rid): return f"{rid}-{datetime.now().strftime('%d%m%H%M')}{random.randint(10,99)}"
-
-def delivery_partner(area):
-    for key, p in DELIVERY_PARTNERS.items():
-        if key in area.lower(): return p
-    return {"name":"Vijay","phone":"+91 98001 11009","rating":4.7}
-
-def record_payout(rid, order_id, subtotal, del_charge):
-    commission = int(subtotal * COMMISSION)
-    rest_amt   = subtotal - commission
-    if rid not in payout_ledger:
-        payout_ledger[rid] = {"pending":0,"paid":0,"orders":0}
-    payout_ledger[rid]["pending"] += rest_amt
-    payout_ledger[rid]["orders"]  += 1
-    order_history.append({
-        "oid": order_id, "rid": rid,
-        "subtotal": subtotal, "commission": commission,
-        "rest": rest_amt, "platform": commission + del_charge,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    })
-
-def search_food(query):
-    q = query.lower()
+def search_food(query, filter_type=None, user_lat=None, user_lng=None):
+    """Search restaurants by food name. Returns list of (distance_km or None, rid, r, matched_items)."""
+    q = FOOD_ALIASES.get(query.lower(), query.lower())
     results = []
     for rid, r in RESTAURANTS.items():
-        if r.get("subscription") != "active": continue
-        matched = any(q in tag or tag in q for tag in r.get("tags", []))
-        if not matched:
-            for cat, items in r["menu"].items():
-                for item in items:
-                    if q in item.lower(): matched = True; break
-                if matched: break
-        if matched: results.append(r)
+        if r.get("subscription") != "active":
+            continue
+        if filter_type == "veg" and r["type"] not in ["veg", "both"]:
+            continue
+        if filter_type == "nonveg" and r["type"] not in ["nonveg", "both"]:
+            continue
+        matched = []
+        for cat, items in r["menu"].items():
+            for item, d in items.items():
+                if q in item.lower() or any(w in item.lower() for w in q.split()):
+                    matched.append(f"{item} ₹{d['price']}")
+        if matched:
+            dist = haversine(user_lat, user_lng, r["lat"], r["lng"]) if user_lat else None
+            results.append((dist, rid, r, matched[:3]))
+    if user_lat:
+        results.sort(key=lambda x: x[0] if x[0] is not None else 9999)
     return results
 
-def find_item(r, name):
-    nl = name.lower()
+
+# ════════════════════════════════════════════════════════════════════════════
+#  MESSAGE BUILDERS
+# ════════════════════════════════════════════════════════════════════════════
+def welcome_msg(zone=None):
+    greeting, meal, foods = time_greeting()
+    area_tag = f" | 📍 {zone}" if zone else ""
+    suggestions = " | ".join([f"_{f}_" for f in foods[:4]])
+    total = len([r for r in RESTAURANTS.values() if r.get("subscription") == "active"])
+    return (
+        f"👋 *Welcome to FoodieBot Chennai!* 🍽️{area_tag}\n"
+        f"_Powered by NexoraAI — Your WhatsApp Food SuperBot_\n\n"
+        f"{greeting} Time for *{meal}*! Try: {suggestions}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📍 *Share your location* for nearest restaurants!\n"
+        f"_(tap 📎 → Location in WhatsApp)_\n\n"
+        f"🔍 *Or search any food:*\n"
+        f"🍛 _biryani_ · 🥣 _idly_ · 🍗 _chicken_ · 🐟 _fish_ · 🍕 _pizza_\n\n"
+        f"*Quick Commands:*\n"
+        f"• *nearby* — Restaurants near you\n"
+        f"• *veg* — Veg only\n"
+        f"• *top* — Highest rated\n"
+        f"• *area T Nagar* — By location\n"
+        f"• *all* — All {total} restaurants\n\n"
+        f"_Type any food name to start!_ 😊"
+    )
+
+def location_received_msg(zone, nearby_list):
+    t  = f"📍 *Got your location!* You're near *{zone}*\n\n"
+    t += f"🍽️ *Restaurants closest to you:*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for i, (dist, rid, r) in enumerate(nearby_list, 1):
+        veg_tag = "🟢" if r["type"] == "veg" else ("🔴" if r["type"] == "nonveg" else "🟡")
+        t += f"{i}️⃣ {r['emoji']} *{r['name']}* {veg_tag}\n"
+        t += f"   📍 {r['area']} — *{dist:.1f} km away*\n"
+        t += f"   ⭐ {r['rating']}/5 | 🛵 {r['delivery_time']}\n"
+        t += f"   💰 Min ₹{r['min_order']} | Delivery ₹{r['delivery_charge']}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, (dist, rid, r) in enumerate(nearby_list, 1):
+        t += f"Type *{i}* to order from {r['name']}\n"
+    t += "\n_Or search a food name (e.g. biryani, dosa, fish)_ 🔍"
+    return t
+
+def show_search_results(query, results):
+    t  = f"🔍 *\"{query}\"* found in {len(results)} restaurant(s)\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for i, (dist, rid, r, matched) in enumerate(results, 1):
+        veg_tag = "🟢 VEG" if r["type"] == "veg" else ("🔴 NON-VEG" if r["type"] == "nonveg" else "🟡 BOTH")
+        t += f"{i}️⃣ {r['emoji']} *{r['name']}* {veg_tag}\n"
+        t += f"   🍽️ {r['cuisine']}\n"
+        dist_str = f" — *{dist:.1f} km*" if dist is not None else ""
+        t += f"   📍 {r['area']}{dist_str}\n"
+        t += f"   ⭐ {r['rating']}/5 | 🛵 {r['delivery_time']} | ₹{r['delivery_charge']} delivery\n"
+        t += f"   🍽️ {' · '.join(matched)}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, (dist, rid, r, _) in enumerate(results, 1):
+        t += f"Type *{i}* to order from {r['name']}\n"
+    t += "\n_Search again or type *nearby* for all restaurants near you_ 🔍"
+    return t
+
+def show_no_results_msg(query, zone=None):
+    area_hint = f" near *{zone}*" if zone else ""
+    _, meal, foods = time_greeting()
+    suggest = ", ".join([f"_{f}_" for f in foods[:3]])
+    return (
+        f"😕 Couldn't find *\"{query}\"*{area_hint}.\n\n"
+        f"*Try these popular {meal} searches:*\n"
+        f"{suggest}\n\n"
+        f"Or try: _chicken_ · _mutton_ · _biryani_ · _dosa_ · _fish_ · _pizza_ · _veg meals_\n\n"
+        f"💡 Type *all* to browse all restaurants!"
+    )
+
+def show_all_restaurants(user_lat=None, user_lng=None):
+    active = [(rid, r) for rid, r in RESTAURANTS.items() if r.get("subscription") == "active"]
+    if user_lat:
+        active.sort(key=lambda x: haversine(user_lat, user_lng, x[1]["lat"], x[1]["lng"]))
+    t = f"🍽️ *All FoodieBot Restaurants — Chennai*\n"
+    t += f"_{len(active)} partner restaurants_\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for i, (rid, r) in enumerate(active, 1):
+        dist = haversine(user_lat, user_lng, r["lat"], r["lng"]) if user_lat else None
+        dist_str = f" | *{dist:.1f} km*" if dist else ""
+        veg_tag = "🟢" if r["type"] == "veg" else ("🔴" if r["type"] == "nonveg" else "🟡")
+        t += f"{i}️⃣ {r['emoji']} *{r['name']}* {veg_tag}\n"
+        t += f"   🍽️ {r['cuisine']} | 📍 {r['area']}{dist_str}\n"
+        t += f"   ⭐ {r['rating']}/5 | 🛵 {r['delivery_time']}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, (rid, r) in enumerate(active, 1):
+        t += f"Type *{i}* to order from {r['name']}\n"
+    return t
+
+def show_restaurant_home(r):
+    t  = f"{r['emoji']} *{r['name']}*\n"
+    t += f"🍽️ {r['cuisine']}\n"
+    t += f"📍 {r['address']}\n"
+    t += f"⭐ {r['rating']}/5 ({r['reviews']} reviews)\n"
+    t += f"🛵 {r['delivery_time']} | ₹{r['delivery_charge']} delivery\n"
+    t += f"💰 Min order: ₹{r['min_order']}\n"
+    t += f"⏰ {r['timing']}\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    # Show menu by category
     for cat, items in r["menu"].items():
+        t += f"*{cat}*\n"
         for item, d in items.items():
-            if nl in item.lower() or item.lower() in nl:
-                return item, d
-    return None, None
+            tag = "🟢" if d.get("veg") else "🔴"
+            t += f"  {tag} {item} — ₹{d['price']}\n"
+        t += "\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "_Type the item names to add to cart_\n"
+    t += "_e.g._ *Chicken Biryani, Chicken 65*\n\n"
+    offers = r.get("offers", {})
+    if offers:
+        t += "🎁 *Offers:*\n"
+        for code, o in offers.items():
+            t += f"  *{code}* — {o['desc']}\n"
+    return t
+
+def show_cart(r, cart):
+    total = sum(d["price"] * d["qty"] for d in cart.values())
+    t = f"🛒 *Your Cart — {r['name']}*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    for item, d in cart.items():
+        t += f"  • {item} × {d['qty']} = ₹{d['price'] * d['qty']}\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"Subtotal: ₹{total}\n"
+    t += f"Delivery: ₹{r['delivery_charge']}\n"
+    t += f"*Total: ₹{total + r['delivery_charge']}*\n\n"
+    if total < r["min_order"]:
+        remaining = r["min_order"] - total
+        t += f"⚠️ Add ₹{remaining} more to reach min order ₹{r['min_order']}\n\n"
+    t += "_Type *checkout* to place order_\n"
+    t += "_Type *more* to add items_\n"
+    t += "_Type *coupon XXXX* to apply discount_\n"
+    t += "_Type *clear* to empty cart_"
+    return t
+
+def order_confirmation(oid, r, name, total, payment_type, partner):
+    t  = "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"✅ *Order Confirmed!*\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"Order ID: *{oid}*\n"
+    t += f"Restaurant: *{r['name']}*\n"
+    t += f"Customer: {name}\n"
+    t += f"Amount: ₹{total}\n"
+    t += f"Payment: {payment_type}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"🛵 *Your Delivery Partner:*\n"
+    t += f"   Name: {partner['name']}\n"
+    t += f"   Phone: {partner['phone']}\n"
+    t += f"   Rating: ⭐{partner['rating']}\n\n"
+    t += f"⏱️ Estimated delivery: {r['delivery_time']}\n\n"
+    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += "_You will receive a call before delivery_\n"
+    t += f"📞 Restaurant: {r['phone']}\n"
+    t += f"📞 Help: {PLATFORM['phone']}\n\n"
+    t += "Thank you for ordering on FoodieBot! 🍛❤️\n"
+    t += "Type *review* after eating to share feedback!"
+    return t
+
+def upi_payment_msg(total, r):
+    gpay  = f"gpay://upi/pay?pa={PLATFORM['upi']}&pn=FoodieBot&am={total}&cu=INR&tn=FoodieBot+Order"
+    phonpe= f"phonepe://pay?pa={PLATFORM['upi']}&pn=FoodieBot&am={total}&cu=INR"
+    return (
+        f"💳 *Payment — ₹{total}*\n\n"
+        f"Pay to: *{PLATFORM['upi']}*\n"
+        f"Amount: *₹{total}*\n\n"
+        f"📱 Quick Pay:\n"
+        f"GPay: {gpay}\n"
+        f"PhonePe: {phonpe}\n\n"
+        f"After paying:\n"
+        f"Type *paid* — confirm UPI payment\n"
+        f"Type *cod* — Cash on Delivery\n\n"
+        f"_Your order will be confirmed once payment is received_"
+    )
 
 def apply_coupon(r, code, subtotal):
+    offers = r.get("offers", {})
     code = code.upper().strip()
-    o = r.get("offers", {}).get(code)
-    if not o: return None, "❌ Invalid coupon. Type *offers* to see valid codes."
-    if subtotal < o["min"]: return None, f"❌ Min order ₹{o['min']} needed. Your total: ₹{subtotal}."
+    o = offers.get(code)
+    if not o:
+        return None, f"❌ Invalid coupon *{code}*. Type *offers* to see valid codes."
+    if subtotal < o["min"]:
+        return None, f"❌ Min order ₹{o['min']} needed. Your total: ₹{subtotal}."
     if o["type"] == "percent":
         d = int(subtotal * o["discount"] / 100)
         return d, f"✅ *{code}* applied! {o['discount']}% off = ₹{d} saved 🎉"
@@ -629,515 +701,419 @@ def apply_coupon(r, code, subtotal):
         return r["delivery_charge"], f"✅ *{code}* applied! Free delivery 🎉"
     return None, "❌ Invalid coupon."
 
-# ═══════════════════════════════════════════════════════════
-# DISPLAY BUILDERS
-# ═══════════════════════════════════════════════════════════
-def welcome():
-    veg_count   = sum(1 for r in RESTAURANTS.values() if r["type"] in ["veg","both"])
-    nonveg_count= sum(1 for r in RESTAURANTS.values() if r["type"] in ["nonveg","both"])
-    total       = len([r for r in RESTAURANTS.values() if r.get("subscription")=="active"])
-    return f"""👋 *Welcome to FoodieBot Chennai!* 🍽️
-_Order from Chennai's best restaurants!_
-
-━━━━━━━━━━━━━━━━━━━━━━
-🟢 *{total} Restaurants* | 🥬 {veg_count} Veg | 🥩 {nonveg_count} Non-Veg
-
-🔍 *Just type what you're craving:*
-
-🥣 _idly_ or _dosa_ — Breakfast spots
-🍛 _biryani_ — All biryani restaurants
-🌶️ _chicken_ — Chicken dishes
-🥩 _mutton_ — Mutton specials
-🐟 _fish_ — Seafood spots
-🍕 _pizza_ — Fast food
-🔥 _barbeque_ — BBQ & Grills
-
-━━━━━━━━━━━━━━━━━━━━━━
-*Quick Commands:*
-• *all* — All {total} restaurants
-• *veg* — Veg only restaurants
-• *nonveg* — Non-veg restaurants
-• *top* — Highest rated
-• *nearby [area]* — By location
-• *cheap* — Budget friendly
-
-_Type any food name to start!_ 😊"""
-
-def show_results(query, results):
-    t  = f"🔍 *\"{query}\"* found in {len(results)} restaurant(s)\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i, r in enumerate(results, 1):
-        veg_tag = "🟢 VEG" if r["type"]=="veg" else ("🔴 NON-VEG" if r["type"]=="nonveg" else "🟡 VEG+NON-VEG")
-        t += f"{i}️⃣ {r['emoji']} *{r['name']}* {veg_tag}\n"
-        t += f"   🍽️ {r['cuisine']}\n"
-        t += f"   📍 {r['area']}\n"
-        t += f"   ⭐ {r['rating']}/5 ({r['reviews']} reviews)\n"
-        t += f"   🛵 {r['delivery_time']} | ₹{r['delivery_charge']} delivery\n"
-        t += f"   💰 Min: ₹{r['min_order']}\n"
-        preview = [f"{item} ₹{d['price']}" for cat, items in r["menu"].items() for item, d in items.items() if query.lower() in item.lower()][:2]
-        if preview: t += f"   🍽️ {' | '.join(preview)}\n"
-        t += "\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    for i, r in enumerate(results, 1):
-        t += f"Type *{i}* → {r['name']}\n"
-    t += "\n_Type another food to search again_ 🔍"
-    return t
-
-def show_all(filter_type=None):
-    active = [r for r in RESTAURANTS.values() if r.get("subscription")=="active"]
-    if filter_type == "veg":
-        active = [r for r in active if r["type"] in ["veg","both"]]
-        title = "🥬 *Vegetarian Restaurants*"
-    elif filter_type == "nonveg":
-        active = [r for r in active if r["type"] in ["nonveg","both"]]
-        title = "🥩 *Non-Veg Restaurants*"
-    else:
-        title = "🍽️ *All Restaurants — FoodieBot Chennai*"
-    t  = f"{title}\n_{len(active)} restaurants_\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i, r in enumerate(active, 1):
-        veg_tag = "🟢" if r["type"]=="veg" else ("🔴" if r["type"]=="nonveg" else "🟡")
-        t += f"{i}️⃣ {veg_tag} {r['emoji']} *{r['name']}*\n"
-        t += f"   {r['cuisine']} | 📍 {r['area']}\n"
-        t += f"   ⭐{r['rating']}/5 | 🛵{r['delivery_time']} | Min ₹{r['min_order']}\n\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    for i, r in enumerate(active, 1):
-        t += f"Type *{i}* → {r['name']}\n"
-    return t, active
-
-def restaurant_home(r):
-    veg_tag = "🟢 Pure Veg" if r["type"]=="veg" else ("🔴 Non-Veg" if r["type"]=="nonveg" else "🟡 Veg & Non-Veg")
-    t  = f"{r['emoji']} *{r['name']}* {veg_tag}\n"
-    t += f"🍽️ {r['cuisine']}\n"
-    t += f"📍 {r['address']}\n"
-    t += f"⭐ {r['rating']}/5 ({r['reviews']} reviews)\n"
-    t += f"⏰ {r['timing']}\n"
-    t += f"🛵 {r['delivery_time']} | ₹{r['delivery_charge']} delivery\n"
-    t += f"💰 Min order: ₹{r['min_order']}\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    t += "🍽️ *M* — Full Menu\n"
-    t += "🏆 *T* — Top Dishes\n"
-    t += "🎉 *O* — Today's Offers\n"
-    t += "📦 *P* — Place Order\n"
-    t += "⭐ *R* — Reviews\n"
-    t += "💳 *Y* — Payment Methods\n"
-    t += "🔙 *back* — Search Other Restaurants\n\n"
-    t += "_Or just tell me what you want!_ 😊"
-    return t
-
-def show_menu(r):
-    t  = f"🍽️ *{r['name']} — Full Menu*\n"
-    t += f"⭐{r['rating']}/5 | Min ₹{r['min_order']}\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for cat, items in r["menu"].items():
-        t += f"*{cat}*\n"
-        for item, d in items.items():
-            spice = f" 🌶️{d['spice']}" if d['spice'] not in ["None","Mild"] else ""
-            t += f"  • {item} — ₹{d['price']} {stars(d['rating'])}{spice}\n"
-        t += "\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    t += "💰 Type *O* for offers!\n"
-    t += "_Tell me what you want to order!_ 🛒"
-    return t
-
-def show_top(r):
-    items = [(i,d) for cat,its in r["menu"].items() for i,d in its.items()]
-    top   = sorted(items, key=lambda x:(x[1]['rating'],x[1]['orders']), reverse=True)[:8]
-    t  = f"🏆 *Top Dishes — {r['name']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i,(item,d) in enumerate(top,1):
-        t += f"{i}. *{item}* — ₹{d['price']}\n"
-        t += f"   {stars(d['rating'])} {d['rating']}/5 | {d['orders']:,}+ orders\n\n"
-    return t
-
-def show_offers(r):
-    t  = f"🎉 *Offers at {r['name']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for code, o in r.get("offers",{}).items():
-        t += f"🏷️ *{code}*\n   {o['desc']}\n   Min: ₹{o['min']}\n\n"
-    t += "Type coupon when ordering | *P* to order 🛒"
-    return t
-
-def show_reviews(r):
-    revs = r.get("reviews",[])
-    t  = f"⭐ *{r['name']} Reviews*\n{r['rating']}/5 ({r['reviews']} reviews)\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for rev in revs:
-        t += f"{stars(rev['rating'])} *{rev['name']}*\n_{rev['date']}_\n{rev['text']}\n\n"
-    t += "Type *add review* to share yours! 📝"
-    return t
-
-def payment_methods():
-    return f"""💳 *Payment — FoodieBot*
-_Secure payments by NexoraAI_
-
-1️⃣ *Google Pay* 📱
-   UPI: `{PLATFORM['upi']}`
-
-2️⃣ *PhonePe* 📱
-   UPI: `{PLATFORM['upi']}`
-
-3️⃣ *Any UPI / Paytm*
-   UPI ID: `{PLATFORM['upi']}`
-
-4️⃣ *Credit / Debit Card* 💳
-   {PLATFORM['card']}
-
-5️⃣ *Cash on Delivery* 💵
-   Pay at your door
-
-📸 After payment share screenshot here!
-📞 Help: {PLATFORM['phone']}"""
-
-def build_payment_screen(r, items_dict, discount, coupon_type, name, address):
-    subtotal = sum(d["price"]*qty for _,(d,qty) in items_dict.items())
-    delivery = 0 if coupon_type=="delivery" else r["delivery_charge"]
-    total    = subtotal - discount + delivery
-    order_id = oid(r["id"])
-    partner  = delivery_partner(r["area"])
-
-    gpay    = f"gpay://upi/pay?pa={PLATFORM['upi']}&am={total}&tn=FoodieBot-{order_id}&cu=INR"
-    phonepe = f"phonepe://pay?pa={PLATFORM['upi']}&am={total}&tn=FoodieBot-{order_id}&cu=INR"
-
-    t  = f"✅ *Order Summary*\n"
-    t += f"Order ID: *{order_id}*\n"
-    t += f"Restaurant: *{r['name']}*\n"
-    t += f"Customer: {name}\n"
-    t += f"Address: {address}\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    for iname,(d,qty) in items_dict.items():
-        t += f"• {iname} x{qty} = ₹{d['price']*qty}\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    t += f"📦 Subtotal:  ₹{subtotal}\n"
-    if discount > 0: t += f"🎉 Discount: -₹{discount}\n"
-    t += f"🛵 Delivery:  ₹{delivery}\n"
-    t += f"💰 *Total:    ₹{total}*\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    t += "*Pay Now:*\n\n"
-    t += f"1️⃣ *Google Pay* — ₹{total}\n   👉 {gpay}\n\n"
-    t += f"2️⃣ *PhonePe* — ₹{total}\n   👉 {phonepe}\n\n"
-    t += f"3️⃣ *Any UPI* — ₹{total}\n   👉 `{PLATFORM['upi']}`\n\n"
-    t += f"4️⃣ *Card* — ₹{total}\n   👉 {PLATFORM['card']}\n\n"
-    t += f"5️⃣ *Cash on Delivery* — ₹{total}\n   Type *cod* to confirm\n\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    t += "📸 After payment: share screenshot ✅\n"
-    t += f"🛵 Partner: {partner['name']} ⭐{partner['rating']}\n"
-    t += f"⏱️ ETA: {r['delivery_time']}\n"
-    t += f"📞 Help: {PLATFORM['phone']}"
-    return t, order_id, total, partner
-
-def confirm_msg(r, oid, total, name, partner, method):
-    t  = f"🎉 *Order Confirmed!*\n\n"
-    t += f"Order ID: *{oid}*\n"
-    t += f"Restaurant: *{r['name']}*\n"
-    t += f"Amount: ₹{total}\n"
-    t += f"Payment: {method}\n"
-    t += f"Customer: {name}\n\n"
-    t += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    t += f"🛵 *Delivery Partner:*\n"
-    t += f"   {partner['name']} | ⭐{partner['rating']}\n"
-    t += f"   📞 {partner['phone']}\n\n"
-    t += f"⏱️ Delivery in {r['delivery_time']}\n"
-    t += f"📞 Restaurant: {r['phone']}\n"
-    t += f"📞 Platform: {PLATFORM['phone']}\n\n"
-    t += "Enjoy your meal! 🍛❤️\n"
-    t += "Type *add review* after eating!"
-    return t
-
 def ask_gpt(r, sender, text):
     if not OPENAI_KEY:
-        return f"Please call {r['phone']} 📞"
-    sessions.setdefault(sender,[])
-    sessions[sender].append({"role":"user","content":text})
-    if len(sessions[sender])>20: sessions[sender]=sessions[sender][-20:]
-    menu_str = ", ".join([f"{i} ₹{d['price']}" for cat,its in r["menu"].items() for i,d in its.items()])
-    sys = f"""You are FoodieBot assistant for {r['name']} ({r['cuisine']}).
-MENU: {menu_str}
-DELIVERY: {r['delivery_time']} | Min ₹{r['min_order']} | Charge ₹{r['delivery_charge']}
-PAYMENT: All via FoodieBot UPI (nexoraai@upi) — GPay/PhonePe/COD
-Help customer order. Be friendly with emojis. Reply in Tamil or English."""
+        return f"Please call us: {r['phone']} 📞"
+    sessions.setdefault(sender, [])
+    sessions[sender].append({"role": "user", "content": text})
+    if len(sessions[sender]) > 20:
+        sessions[sender] = sessions[sender][-20:]
+    menu_str   = ", ".join([f"{item} ₹{d['price']}" for cat, its in r["menu"].items() for item, d in its.items()])
+    offers_str = ", ".join([f"{c}: {o['desc']}" for c, o in r.get("offers", {}).items()])
+    system = (
+        f"You are a WhatsApp ordering assistant for {r['name']} ({r['cuisine']}) on FoodieBot Chennai.\n"
+        f"MENU: {menu_str}\n"
+        f"OFFERS: {offers_str}\n"
+        f"DELIVERY: {r['delivery_time']} | ₹{r['delivery_charge']} | Min ₹{r['min_order']} | {r['timing']}\n"
+        f"PAYMENT: Via FoodieBot UPI ({PLATFORM['upi']}) — GPay/PhonePe/COD\n"
+        f"Be friendly, use emojis, reply concisely. Suggest combos and upsell where appropriate."
+    )
     try:
-        resp = requests.post("https://api.openai.com/v1/chat/completions",
-            headers={"Authorization":f"Bearer {OPENAI_KEY}","Content-Type":"application/json"},
-            json={"model":"gpt-3.5-turbo","messages":[{"role":"system","content":sys}]+sessions[sender],"max_tokens":400},
-            timeout=30)
-        if resp.status_code==200:
-            reply = resp.json()["choices"][0]["message"]["content"]
-            sessions[sender].append({"role":"assistant","content":reply})
-            return reply
-    except: pass
-    return f"Please call {r['phone']} 📞"
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
+            json={"model": "gpt-4o-mini", "messages": [{"role": "system", "content": system}] + sessions[sender], "max_tokens": 300},
+            timeout=10
+        )
+        reply = resp.json()["choices"][0]["message"]["content"]
+        sessions[sender].append({"role": "assistant", "content": reply})
+        return reply
+    except Exception:
+        return f"Sorry, I'm having trouble right now. Call us: {r['phone']} 📞"
 
-# ═══════════════════════════════════════════════════════════
-# MAIN MESSAGE HANDLER
-# ═══════════════════════════════════════════════════════════
-def handle(sender, text):
-    t = text.lower().strip()
-    order = active_orders.get(sender, {})
-    r = RESTAURANTS.get(order.get("rid")) if order.get("rid") else None
 
-    # BACK
-    if t in ["back","home","restart","hi","hello","hey","start","vanakkam"]:
-        active_orders.pop(sender,None); sessions.pop(sender,None)
-        if t in ["back","home","restart"]:
-            return welcome()
-        return welcome()
+# ════════════════════════════════════════════════════════════════════════════
+#  TWILIO SENDER
+# ════════════════════════════════════════════════════════════════════════════
+def send_whatsapp(to, body):
+    if not TWILIO_SID or not TWILIO_AUTH:
+        print(f"[DRY RUN → {to}]\n{body}\n")
+        return
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json"
+    requests.post(url, auth=(TWILIO_SID, TWILIO_AUTH), data={
+        "From": TWILIO_FROM,
+        "To":   f"whatsapp:{to}" if not to.startswith("whatsapp:") else to,
+        "Body": body
+    })
 
-    # REVIEW FLOW
-    if sender in pending_reviews:
-        pr = pending_reviews[sender]; step = pr.get("step")
-        if step=="dish":
-            pr["dish"]=text; pr["step"]="rating"
-            return "Rate 1-5:\n1️⃣ Poor 2️⃣ Below Avg 3️⃣ Good 4️⃣ Very Good 5️⃣ Excellent ⭐"
-        if step=="rating":
-            try:
-                rating=int(t)
-                if 1<=rating<=5:
-                    pr["rating"]=rating; pr["step"]="review"
-                    return f"Rated {stars(rating)} ({rating}/5)\nTell us your experience 🙏"
-            except: pass
-            return "Reply with 1-5 ⭐"
-        if step=="review":
-            dish=pr.get("dish","Overall"); rating=pr.get("rating",5)
-            del pending_reviews[sender]
-            return f"✅ *Thank You!*\n{dish} — {stars(rating)} ({rating}/5)\n_{text}_\n\n🎁 Free item on next visit! ❤️"
-        del pending_reviews[sender]; return "Thank you! 🙏"
 
-    # PAYMENT STEP
-    if r and order.get("step")=="payment":
-        order_id = order.get("oid", oid(r["id"]))
-        total    = order.get("total","?")
-        name     = order.get("name","Customer")
-        partner  = order.get("partner", delivery_partner(r["area"]))
+# ════════════════════════════════════════════════════════════════════════════
+#  CORE MESSAGE HANDLER
+# ════════════════════════════════════════════════════════════════════════════
+def handle_message(sender, body, latitude=None, longitude=None):
+    text  = (body or "").strip()
+    lower = text.lower()
+    now   = time.time()
 
-        if any(x in t for x in ["cod","cash","5"]):
-            record_payout(r["id"], order_id, order.get("subtotal",0), r["delivery_charge"])
-            del active_orders[sender]
-            return confirm_msg(r, order_id, total, name, partner, "Cash on Delivery 💵")
+    # Init state
+    state = user_state.setdefault(sender, {
+        "step": "home", "cart": {}, "restaurant": None,
+        "name": None, "address": None,
+        "coupon_discount": 0, "search_results": [],
+        "location_lat": None, "location_lng": None, "zone": None,
+        "last_active": now
+    })
+    state["last_active"] = now
 
-        if any(x in t for x in ["paid","done","sent","screenshot","payment","gpay","phonepe"]):
-            record_payout(r["id"], order_id, order.get("subtotal",0), r["delivery_charge"])
-            del active_orders[sender]
-            return confirm_msg(r, order_id, total, name, partner, "Online Payment ✅")
+    # ── LOCATION PIN SHARED ──────────────────────────────────────────────────
+    if latitude is not None and longitude is not None:
+        lat, lng = float(latitude), float(longitude)
+        state["location_lat"] = lat
+        state["location_lng"] = lng
+        zone = latlong_to_zone(lat, lng)
+        state["zone"] = zone
+        nearby = restaurants_near(lat, lng, limit=5)
+        state["search_results"] = [(dist, rid, r) for dist, rid, r in nearby]
+        state["step"] = "home"
+        return location_received_msg(zone, nearby)
 
-    # COUPON STEP
-    if r and order.get("step")=="coupon":
-        subtotal=order.get("subtotal",0); items_dict=order.get("items_dict",{})
-        name=order.get("name","Customer"); address=order.get("address","Chennai")
-        if t in ["skip","no","none","0"]:
-            summary,oid_,total,partner = build_payment_screen(r,items_dict,0,None,name,address)
-            active_orders[sender].update({"step":"payment","oid":oid_,"total":total,"partner":partner})
-            return summary
-        disc,msg = apply_coupon(r,text,subtotal)
-        if disc is not None:
-            o = r.get("offers",{}).get(text.upper(),{})
-            summary,oid_,total,partner = build_payment_screen(r,items_dict,disc,o.get("type"),name,address)
-            active_orders[sender].update({"step":"payment","oid":oid_,"total":total,"partner":partner})
-            return f"{msg}\n\n{summary}"
-        return f"{msg}\n\nType coupon or *skip* to continue."
+    # ── NUMBER SELECTION (from search / nearby / all list) ───────────────────
+    if text.isdigit() and state["step"] in ("home", "search", "area_search"):
+        idx = int(text) - 1
+        results = state.get("search_results", [])
+        if results and 0 <= idx < len(results):
+            entry = results[idx]
+            if len(entry) == 3:
+                dist, rid, r = entry
+            else:
+                dist, rid, r, _ = entry
+            state["restaurant"] = rid
+            state["cart"] = {}
+            state["coupon_discount"] = 0
+            state["step"] = "restaurant"
+            return show_restaurant_home(r)
+        return "❓ Please pick a number from the list above."
 
-    # NAME+ADDRESS STEP
-    if r and order.get("step")=="name_address" and len(text)>4:
-        parts = text.split(",",1)
-        name    = parts[0].strip()
-        address = parts[1].strip() if len(parts)>1 else r["area"]
-        active_orders[sender].update({"name":name,"address":address,"step":"coupon"})
-        codes = ", ".join(r.get("offers",{}).keys())
-        return f"✅ Saved!\n👤 {name}\n📍 {address}\n\n🎉 *Have a coupon?*\nCodes: *{codes}*\n\nType code or *skip* →"
+    # ── WITHIN RESTAURANT FLOW ───────────────────────────────────────────────
+    if state["step"] == "restaurant" and state.get("restaurant"):
+        r = RESTAURANTS[state["restaurant"]]
 
-    # NUMBER SELECTION
-    all_list = order.get("all_list",[])
-    search_results = order.get("search_results",[])
-    current_list = all_list or search_results
+        # --- view cart ---
+        if lower in ("cart", "view cart", "my cart"):
+            return show_cart(r, state["cart"]) if state["cart"] else "🛒 Your cart is empty. Type menu items to add!"
 
-    if current_list and t.isdigit():
-        idx = int(t)-1
-        if 0<=idx<len(current_list):
-            sel = current_list[idx]
-            active_orders[sender] = {"rid":sel["id"]}
-            return restaurant_home(sel)
+        # --- clear cart ---
+        if lower in ("clear", "clear cart"):
+            state["cart"] = {}
+            return "🗑️ Cart cleared! Type item names to add again."
 
-    # IN RESTAURANT
-    if r:
-        if t in ["m","menu"]: return show_menu(r)
-        if t in ["t","top"]:  return show_top(r)
-        if t in ["o","offers","deals"]: return show_offers(r)
-        if t in ["r","reviews"]: return show_reviews(r)
-        if t in ["y","payment","pay"]: return payment_methods()
-        if t in ["p","order","place order"]:
-            return f"🛒 Order from *{r['name']}*\n\nTell me what you want!\nExample: _2 Idly and 1 Masala Dosa_\n\nType *O* for offers first!\nMin: ₹{r['min_order']}"
-        if any(x in t for x in ["add review","write review","my review"]):
-            pending_reviews[sender]={"step":"dish","restaurant":r["name"]}
-            return f"📝 Review for *{r['name']}*\n\nWhich dish to review?"
-        if t in ["veg","veg items"]:
-            veg=[f"• {i} — ₹{d['price']}" for cat,its in r["menu"].items() for i,d in its.items() if d['spice'] in ['None','Mild']]
-            return f"🥬 *Mild/Veg at {r['name']}*\n\n"+"\n".join(veg[:10])
+        # --- checkout ---
+        if lower == "checkout":
+            if not state["cart"]:
+                return "🛒 Your cart is empty! Type menu items first."
+            subtotal = sum(d["price"] * d["qty"] for d in state["cart"].values())
+            if subtotal < r["min_order"]:
+                return f"⚠️ Min order for {r['name']} is ₹{r['min_order']}. Add ₹{r['min_order'] - subtotal} more."
+            state["step"] = "get_name"
+            return "📦 Almost there! What's your *name* for the order?"
 
-        # PARSE ORDER ITEMS
-        items_dict={}; total_price=0
-        for cat,items in r["menu"].items():
-            for iname,details in items.items():
-                if iname.lower() in t:
-                    words=t.split(); qty=1
-                    for i,w in enumerate(words):
-                        if w.isdigit() and i+1<len(words) and iname.split()[0].lower() in words[i+1].lower():
-                            qty=int(w)
-                    items_dict[iname]=(details,qty); total_price+=details["price"]*qty
+        # --- coupon ---
+        if lower.startswith("coupon ") or lower.startswith("apply "):
+            code = text.split(" ", 1)[1]
+            sub = sum(d["price"] * d["qty"] for d in state["cart"].values())
+            disc, msg = apply_coupon(r, code, sub)
+            if disc:
+                state["coupon_discount"] = disc
+            return msg
 
-        if items_dict and total_price>=r["min_order"]:
-            active_orders[sender].update({"items_dict":items_dict,"subtotal":total_price,"step":"name_address"})
-            preview="\n".join([f"• {n} x{qty}=₹{d['price']*qty}" for n,(d,qty) in items_dict.items()])
-            return f"🛒 *Your Order:*\n{preview}\nSubtotal: ₹{total_price}\n\n📋 Share *Name, Address* (comma separated)\nExample: _Raj Kumar, 14 Anna St T Nagar_"
+        # --- offers ---
+        if lower in ("offers", "discount", "coupons"):
+            offers = r.get("offers", {})
+            if not offers:
+                return "No active offers right now. Stay tuned!"
+            t = "🎁 *Active Offers:*\n"
+            for code, o in offers.items():
+                t += f"  *{code}* — {o['desc']}\n"
+            t += "\nType *coupon CODE* to apply."
+            return t
 
-        if items_dict and total_price<r["min_order"]:
-            return f"❌ Min order ₹{r['min_order']}. Total: ₹{total_price}. Add more!\nType *M* for menu."
+        # --- more items / back ---
+        if lower in ("more", "back", "menu"):
+            return show_restaurant_home(r)
 
-        return ask_gpt(r,sender,text)
+        # --- try to parse items from menu ---
+        all_items = {item.lower(): (item, d["price"]) for cat, its in r["menu"].items() for item, d in its.items()}
+        added = []
+        for item_lower, (item_name, price) in all_items.items():
+            if item_lower in lower:
+                qty = 1
+                # try "2 chicken biryani" or "chicken biryani x2"
+                import re
+                m = re.search(r'(\d+)\s*[x×]?\s*' + re.escape(item_lower), lower) or \
+                    re.search(re.escape(item_lower) + r'\s*[x×]?\s*(\d+)', lower)
+                if m:
+                    qty = int(m.group(1))
+                if item_name in state["cart"]:
+                    state["cart"][item_name]["qty"] += qty
+                else:
+                    state["cart"][item_name] = {"price": price, "qty": qty}
+                added.append(f"{item_name} × {qty}")
+        if added:
+            sub = sum(d["price"] * d["qty"] for d in state["cart"].values())
+            total = sub + r["delivery_charge"] - state["coupon_discount"]
+            t  = f"✅ Added: {', '.join(added)}\n\n"
+            t += f"🛒 Cart total: ₹{total} ({len(state['cart'])} item(s))\n"
+            t += f"Type *cart* to review | *checkout* to order | add more items"
+            return t
 
-    # PLATFORM COMMANDS
-    if t in ["all","all restaurants","list"]:
-        result,active = show_all()
-        active_orders[sender]={"all_list":active}
-        return result
+        # --- GPT fallback for restaurant context ---
+        return ask_gpt(r, sender, text)
 
-    if t in ["veg","pure veg","vegetarian"]:
-        result,active = show_all("veg")
-        active_orders[sender]={"all_list":active,"filter":"veg"}
-        return result
+    # ── ORDER FLOW ───────────────────────────────────────────────────────────
+    if state["step"] == "get_name":
+        state["name"] = text
+        state["step"] = "get_address"
+        zone = state.get("zone")
+        hint = f"\n_(Detected near {zone} — just confirm or update)_" if zone else ""
+        return f"🏠 Great *{text}*! What's your *delivery address*?{hint}"
 
-    if t in ["nonveg","non veg","non-veg"]:
-        result,active = show_all("nonveg")
-        active_orders[sender]={"all_list":active,"filter":"nonveg"}
-        return result
+    if state["step"] == "get_address":
+        state["address"] = text
+        # also try to detect zone from address text
+        if not state.get("zone"):
+            match = text_to_zone(text)
+            if match:
+                state["zone"] = match[0]
+                state["location_lat"] = match[1]
+                state["location_lng"] = match[2]
+        r = RESTAURANTS[state["restaurant"]]
+        sub  = sum(d["price"] * d["qty"] for d in state["cart"].values())
+        tot  = sub + r["delivery_charge"] - state["coupon_discount"]
+        state["order_total"] = tot
+        state["step"] = "payment"
+        return upi_payment_msg(tot, r)
 
-    if t in ["top","top rated","best"]:
-        sorted_r = sorted(RESTAURANTS.values(), key=lambda x:x["rating"], reverse=True)
-        active_orders[sender]={"all_list":sorted_r}
-        txt = "🏆 *Top Rated Restaurants*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        for i,res in enumerate(sorted_r,1):
-            vt = "🟢" if res["type"]=="veg" else "🔴"
-            txt+=f"{i}️⃣ {vt} {res['emoji']} *{res['name']}*\n   ⭐{res['rating']}/5 | {res['area']}\n\n"
-        txt+="Type number to order!"
-        return txt
+    if state["step"] == "payment":
+        if lower in ("paid", "done", "payment done", "upi done", "gpay", "phonepay"):
+            payment_type = "UPI"
+        elif lower in ("cod", "cash", "cash on delivery"):
+            payment_type = "COD"
+        else:
+            return "💳 Type *paid* after UPI payment or *cod* for Cash on Delivery."
 
-    if t in ["cheap","budget","affordable"]:
-        sorted_r=sorted(RESTAURANTS.values(),key=lambda x:x["min_order"])
-        active_orders[sender]={"all_list":sorted_r}
-        txt="💰 *Budget-Friendly*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        for i,res in enumerate(sorted_r,1):
-            txt+=f"{i}️⃣ {res['emoji']} *{res['name']}*\n   Min: ₹{res['min_order']} | Delivery: ₹{res['delivery_charge']}\n   📍{res['area']}\n\n"
-        txt+="Type number to order!"
-        return txt
+        r = RESTAURANTS[state["restaurant"]]
+        partner = random.choice(r["delivery_partners"])
+        oid = "FB" + str(uuid.uuid4())[:6].upper()
+        total = state.get("order_total", 0)
 
-    if t.startswith("nearby ") or t.startswith("area "):
-        area = t.replace("nearby ","").replace("area ","").strip()
-        results=[res for res in RESTAURANTS.values() if area in res["area"].lower() and res.get("subscription")=="active"]
-        if results:
-            active_orders[sender]={"all_list":results}
-            txt=f"📍 *Restaurants near {area.title()}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            for i,res in enumerate(results,1):
-                txt+=f"{i}️⃣ {res['emoji']} *{res['name']}*\n   ⭐{res['rating']}/5 | {res['delivery_time']}\n\n"
-            txt+="Type number to order!"
-            return txt
-        return f"No restaurants near *{area}*.\nTry: T Nagar, Anna Nagar, Velachery, Vadapalani, Perambur, Mogappair, Nungambakkam"
+        # Save order
+        orders[oid] = {
+            "restaurant": state["restaurant"], "name": state["name"],
+            "address": state["address"], "cart": state["cart"].copy(),
+            "total": total, "payment": payment_type, "partner": partner,
+            "time": datetime.datetime.now().isoformat(), "sender": sender
+        }
+        commission = int(total * PLATFORM["commission"])
+        payouts[state["restaurant"]] = payouts.get(state["restaurant"], 0) + (total - commission)
 
-    # FOOD SEARCH — MAIN FEATURE
-    for word in ["i want","i need","give me","show me","order","looking for","want"]:
-        t=t.replace(word,"").strip()
+        msg = order_confirmation(oid, r, state["name"], total, payment_type, partner)
 
-    if len(t)>1:
-        results=search_food(t)
-        if results:
-            active_orders[sender]={"search_results":results}
-            return show_results(t,results)
-        return f"🔍 No results for *\"{t}\"*\n\nTry: idly / dosa / biryani / chicken / fish / pizza / mutton\nOr type *all* to see all restaurants! 🍽️"
+        # Reset
+        state["step"] = "home"
+        state["cart"] = {}
+        state["restaurant"] = None
+        state["coupon_discount"] = 0
+        state["search_results"] = []
+        return msg
 
-    return welcome()
+    # ── HOME COMMANDS ────────────────────────────────────────────────────────
+    ulat = state.get("location_lat")
+    ulng = state.get("location_lng")
+    uzone = state.get("zone")
 
-# ═══════════════════════════════════════════════════════════
-# FLASK ROUTES
-# ═══════════════════════════════════════════════════════════
-@app.route("/whatsapp", methods=["POST"])
-def whatsapp():
-    sender = request.form.get("From","")
-    text   = request.form.get("Body","").strip()
-    media  = int(request.form.get("NumMedia","0"))
-    print(f"📱 {sender}: {text[:60]}")
-    resp = MessagingResponse()
+    # hi / hello → welcome
+    if lower in ("hi", "hello", "hey", "start", "hii", "menu", "help"):
+        return welcome_msg(uzone)
 
-    # Screenshot = payment confirmation
-    if media>0:
-        order=active_orders.get(sender,{})
-        r=RESTAURANTS.get(order.get("rid"))
-        if r and order.get("step")=="payment":
-            order_id=order.get("oid",oid(r["id"]))
-            total=order.get("total","?"); name=order.get("name","Customer")
-            partner=order.get("partner",delivery_partner(r["area"]))
-            record_payout(r["id"],order_id,order.get("subtotal",0),r["delivery_charge"])
-            del active_orders[sender]
-            resp.message(confirm_msg(r,order_id,total,name,partner,"Online Payment (Screenshot) ✅"))
-            return str(resp)
+    # nearby (no args) → show nearest based on stored location
+    if lower in ("nearby", "near me", "closest"):
+        if ulat:
+            nearby = restaurants_near(ulat, ulng, 5)
+            state["search_results"] = [(d, rid, r) for d, rid, r in nearby]
+            state["step"] = "home"
+            return location_received_msg(uzone or "your area", nearby)
+        return (
+            "📍 Share your location first!\n"
+            "_(tap 📎 → Location in WhatsApp)_\n\n"
+            "Or type *area T Nagar* / *area Adyar* etc."
+        )
 
-    try:
-        reply = handle(sender, text)
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback; traceback.print_exc()
-        reply = f"Sorry! Type *hi* to restart or call {PLATFORM['phone']} 🙏"
+    # area <zone> → look up zone and show nearest
+    if lower.startswith("area "):
+        area_query = text[5:].strip()
+        match = text_to_zone(area_query)
+        if match:
+            zname, zlat, zlng = match
+            state["zone"] = zname
+            state["location_lat"] = zlat
+            state["location_lng"] = zlng
+            nearby = restaurants_near(zlat, zlng, 5)
+            state["search_results"] = [(d, rid, r) for d, rid, r in nearby]
+            state["step"] = "area_search"
+            return location_received_msg(zname, nearby)
+        return f"😕 Couldn't find *{area_query}* in Chennai. Try: T Nagar, Adyar, Velachery, Anna Nagar, OMR, Mylapore…"
 
-    resp.message(reply)
-    return str(resp)
+    # all
+    if lower == "all":
+        active = [(rid, r) for rid, r in RESTAURANTS.items() if r.get("subscription") == "active"]
+        if ulat:
+            active.sort(key=lambda x: haversine(ulat, ulng, x[1]["lat"], x[1]["lng"]))
+        state["search_results"] = [(haversine(ulat, ulng, r["lat"], r["lng"]) if ulat else None, rid, r) for rid, r in active]
+        state["step"] = "home"
+        return show_all_restaurants(ulat, ulng)
+
+    # veg
+    if lower in ("veg", "vegetarian", "veg only"):
+        results = search_food("", filter_type="veg", user_lat=ulat, user_lng=ulng)
+        # show all veg restaurants
+        veg_rests = [(haversine(ulat, ulng, r["lat"], r["lng"]) if ulat else 0, rid, r)
+                     for rid, r in RESTAURANTS.items() if r.get("subscription") == "active" and r["type"] in ("veg", "both")]
+        if ulat:
+            veg_rests.sort(key=lambda x: x[0])
+        state["search_results"] = veg_rests
+        state["step"] = "home"
+        t = f"🟢 *Veg Restaurants — Chennai*\n"
+        t += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for i, (dist, rid, r) in enumerate(veg_rests, 1):
+            dist_str = f" | *{dist:.1f} km*" if ulat else ""
+            t += f"{i}️⃣ {r['emoji']} *{r['name']}*\n"
+            t += f"   📍 {r['area']}{dist_str} | ⭐ {r['rating']}/5\n\n"
+        t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        for i, (_, rid, r) in enumerate(veg_rests, 1):
+            t += f"Type *{i}* to order from {r['name']}\n"
+        return t
+
+    # top
+    if lower in ("top", "best", "top rated"):
+        ranked = sorted(
+            [(rid, r) for rid, r in RESTAURANTS.items() if r.get("subscription") == "active"],
+            key=lambda x: x[1]["rating"], reverse=True
+        )
+        state["search_results"] = [(haversine(ulat, ulng, r["lat"], r["lng"]) if ulat else 0, rid, r) for rid, r in ranked]
+        state["step"] = "home"
+        t = "⭐ *Top Rated Restaurants*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for i, (rid, r) in enumerate(ranked, 1):
+            t += f"{i}️⃣ {r['emoji']} *{r['name']}* — ⭐{r['rating']}/5\n   📍 {r['area']} | {r['cuisine']}\n\n"
+        t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        for i, (rid, r) in enumerate(ranked, 1):
+            t += f"Type *{i}* to order from {r['name']}\n"
+        return t
+
+    # cheap
+    if lower in ("cheap", "budget", "cheap food"):
+        cheap = sorted(
+            [(rid, r) for rid, r in RESTAURANTS.items() if r.get("subscription") == "active"],
+            key=lambda x: x[1]["min_order"]
+        )
+        state["search_results"] = [(0, rid, r) for rid, r in cheap]
+        state["step"] = "home"
+        t = "💰 *Budget Friendly Restaurants*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for i, (rid, r) in enumerate(cheap, 1):
+            t += f"{i}️⃣ {r['emoji']} *{r['name']}* — Min ₹{r['min_order']}\n   📍 {r['area']} | ⭐{r['rating']}/5\n\n"
+        t += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        for i, (rid, r) in enumerate(cheap, 1):
+            t += f"Type *{i}* to order from {r['name']}\n"
+        return t
+
+    # review shortcut
+    if lower.startswith("review"):
+        return "⭐ Thank you! Share your review:\nhttps://g.page/foodiebot-chennai\n\n_Your feedback helps us grow!_ 🙏"
+
+    # proactive nudge (blank message or "?")
+    if lower in ("", "?"):
+        _, meal, foods = time_greeting()
+        return proactive_nudge(meal, foods, uzone)
+
+    # ── FOOD SEARCH (default) ────────────────────────────────────────────────
+    results = search_food(lower, user_lat=ulat, user_lng=ulng)
+    if results:
+        state["search_results"] = results
+        state["step"] = "search"
+        return show_search_results(lower, results)
+    else:
+        return show_no_results_msg(lower, uzone)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  WEBHOOK
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        return "FoodieBot SuperBot v3 is live! 🚀", 200
+
+    # Twilio sends form-encoded POST
+    sender  = request.form.get("From", "").replace("whatsapp:", "")
+    body    = request.form.get("Body", "").strip()
+
+    # WhatsApp location share → Twilio sends Latitude / Longitude fields
+    latitude  = request.form.get("Latitude")
+    longitude = request.form.get("Longitude")
+
+    if not sender:
+        return jsonify({"status": "no sender"}), 400
+
+    reply = handle_message(sender, body, latitude, longitude)
+    send_whatsapp(sender, reply)
+    return jsonify({"status": "ok"}), 200
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  ADMIN APIs
+# ════════════════════════════════════════════════════════════════════════════
+def admin_auth():
+    return request.args.get("key") == ADMIN_KEY
+
+@app.route("/admin/orders")
+def admin_orders():
+    if not admin_auth(): return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"total_orders": len(orders), "orders": orders})
 
 @app.route("/admin/stats")
-def stats():
-    if request.args.get("key")!=MASTER_KEY: return jsonify({"error":"Unauthorized"}),401
-    active=[r for r in RESTAURANTS.values() if r.get("subscription")=="active"]
-    mrr=sum({"starter":2999,"pro":4999,"enterprise":9999}.get(r.get("plan","starter"),2999) for r in active)
-    comm=sum(o["commission"] for o in order_history)
-    del_rev=sum(o.get("platform",0)-o.get("commission",0) for o in order_history)
+def admin_stats():
+    if not admin_auth(): return jsonify({"error": "unauthorized"}), 401
+    total_rev = sum(o["total"] for o in orders.values())
     return jsonify({
-        "platform":          "FoodieBot Chennai by NexoraAI",
-        "total_restaurants": len(RESTAURANTS),
-        "active":            len(active),
-        "veg_restaurants":   len([r for r in active if r["type"]=="veg"]),
-        "nonveg_restaurants":len([r for r in active if r["type"]=="nonveg"]),
-        "subscription_mrr":  f"₹{mrr:,}/month",
-        "total_orders":      len(order_history),
-        "commission_earned": f"₹{comm:,}",
-        "delivery_revenue":  f"₹{del_rev:,}",
-        "total_revenue":     f"₹{mrr+comm:,}",
+        "total_orders": len(orders),
+        "total_revenue": total_rev,
+        "platform_commission": int(total_rev * PLATFORM["commission"]),
+        "active_restaurants": len([r for r in RESTAURANTS.values() if r.get("subscription") == "active"]),
+        "active_sessions": len(user_state)
     })
 
 @app.route("/admin/payouts")
-def payouts():
-    if request.args.get("key")!=MASTER_KEY: return jsonify({"error":"Unauthorized"}),401
-    result=[]
-    for rid,data in payout_ledger.items():
-        r=RESTAURANTS.get(rid,{})
-        result.append({"restaurant":r.get("name"),"phone":r.get("phone"),"pending":f"₹{data['pending']:,}","orders":data["orders"]})
-    total=sum(d["pending"] for d in payout_ledger.values())
-    return jsonify({"payouts":result,"total_pending":f"₹{total:,}"})
+def admin_payouts():
+    if not admin_auth(): return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"payouts": payouts})
 
-@app.route("/admin/orders")
-def orders():
-    if request.args.get("key")!=MASTER_KEY: return jsonify({"error":"Unauthorized"}),401
-    return jsonify({"orders":order_history[-50:],"total":len(order_history)})
+@app.route("/admin/broadcast")
+def admin_broadcast():
+    """Send a proactive nudge to all active users."""
+    if not admin_auth(): return jsonify({"error": "unauthorized"}), 401
+    _, meal, foods = time_greeting()
+    count = 0
+    for sender, state in user_state.items():
+        # only ping users active in last 24h
+        if time.time() - state.get("last_active", 0) < 86400:
+            msg = proactive_nudge(meal, foods, state.get("zone"))
+            send_whatsapp(sender, msg)
+            count += 1
+    return jsonify({"broadcast_sent": count, "meal": meal})
 
-@app.route("/")
-def home():
-    active=len([r for r in RESTAURANTS.values() if r.get("subscription")=="active"])
-    veg=len([r for r in RESTAURANTS.values() if r["type"]=="veg"])
-    nonveg=len([r for r in RESTAURANTS.values() if r["type"]=="nonveg"])
-    return f"""
-    <h1>🍽️ FoodieBot Chennai</h1>
-    <h3>by NexoraAI | {PLATFORM['phone']}</h3>
-    <hr>
-    <p>✅ Platform Live! | 📦 Orders: {len(order_history)}</p>
-    <p>🏪 Total: {len(RESTAURANTS)} | ✅ Active: {active} | 🟢 Veg: {veg} | 🔴 Non-Veg: {nonveg}</p>
-    <hr>
-    <h3>Restaurants:</h3>
-    <ul>{"".join(f"<li>{'🟢' if r['type']=='veg' else '🔴'} {r['emoji']} {r['name']} — {r['area']}</li>" for r in RESTAURANTS.values())}</ul>
-    <hr>
-    <p>🌐 {PLATFORM['website']}</p>
-    """,200
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "version": "SuperBot v3.0", "restaurants": len(RESTAURANTS)})
 
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",5000)),debug=False)
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
