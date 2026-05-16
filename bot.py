@@ -1202,3 +1202,10 @@ def health():
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    # Handle if Twilio is mistakenly posting to /
+    if request.method == "POST":
+        return webhook()  # redirect to webhook handler
+    return "FoodieBot SuperBot v4 🚀", 200
