@@ -960,6 +960,15 @@ def handle(sender,body,lat=None,lng=None):
             "Try: T Nagar · Adyar · Velachery · Anna Nagar · OMR · Mylapore"
         )
 
+    # ── BARE ZONE NAME (no "area" prefix needed) ───────────────────────────
+    # Customer types "perambur", "anna nagar", "vadapalani" directly
+    zone_match=zone_from_text(lower)
+    if zone_match:
+        zn,zl,zg=zone_match;s.update({"zone":zn,"lat":zl,"lng":zg})
+        nb=rests_near(zl,zg,8,RADIUS_KM)
+        s["results"]=[(d,rid,r) for d,rid,r in nb];s["step"]="area_search"
+        return msg_location(zn,nb)
+
     if lower=="all":
         result=msg_all(ul,ug,uz,radius=RADIUS_KM if ul else None)
         if isinstance(result,tuple):msg,nb=result
@@ -1028,12 +1037,21 @@ def handle(sender,body,lat=None,lng=None):
         s["results"]=results;s["step"]="search"
         return msg_search(lower,results)
 
-    # Nothing found
+    # Nothing found — try zone match as last resort
+    zone_fallback=zone_from_text(lower)
+    if zone_fallback:
+        zn,zl,zg=zone_fallback;s.update({"zone":zn,"lat":zl,"lng":zg})
+        nb=rests_near(zl,zg,8,RADIUS_KM)
+        s["results"]=[(d,rid,r) for d,rid,r in nb];s["step"]="area_search"
+        return msg_location(zn,nb)
+
     _,meal,foods=greet()
     sug=" | ".join([f"_{f}_" for f in foods[:3]])
     return(
         f"😕 No result for *{lower}*.\n\n"
         f"Popular *{meal}* picks: {sug}\n\n"
+        f"Or type any Chennai area to find nearby restaurants:\n"
+        f"_T Nagar · Adyar · Anna Nagar · Perambur · Velachery_\n\n"
         f"Type *all* to browse all restaurants"
     )
 
